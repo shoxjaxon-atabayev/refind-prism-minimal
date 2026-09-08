@@ -2,14 +2,13 @@
 
 A dark, ultra-minimal [rEFInd](https://www.rodsbooks.com/refind/) boot theme —
 pure-black background, white silhouette OS icons, no panels, no labels. The
-**selected** entry is marked by a square highlight: a crisp coloured border,
-a translucent tinted tile behind the white icon (so the focused icon reads as
-*coloured*), and a soft outer glow.
+**selected** entry is marked by one thing only: a square coloured border
+around it. No fill, no glow, no sheen — the white icon shows through untouched.
 
 It ships in **10 colours** — hence *Prism*. Six flat ones and a plain white
-default; three "premium" ones with a baked-in **iridescent** sheen (a
-hue-cycling border plus a specular streak — rEFInd has no shader to do that
-live, so it's pre-rendered into the PNG).
+default; three "premium" ones whose border is **iridescent** — the stroke
+cycles hue around the frame like holographic foil (rEFInd has no shader to do
+that live, so it's pre-rendered into the PNG).
 
 ![all ten selection styles](preview.png)
 

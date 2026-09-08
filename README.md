@@ -1,4 +1,4 @@
-# refind-theme
+# Prism Minimal
 
 A dark, ultra-minimal [rEFInd](https://www.rodsbooks.com/refind/) boot theme —
 pure-black background, white silhouette OS icons, no panels, no labels. The
@@ -6,10 +6,10 @@ pure-black background, white silhouette OS icons, no panels, no labels. The
 a translucent tinted tile behind the white icon (so the focused icon reads as
 *coloured*), and a soft outer glow.
 
-It ships in **10 colours**. Six flat ones and a plain white default; three
-"premium" ones with a baked-in **iridescent** sheen (a hue-cycling border plus
-a specular streak — rEFInd has no shader to do that live, so it's pre-rendered
-into the PNG).
+It ships in **10 colours** — hence *Prism*. Six flat ones and a plain white
+default; three "premium" ones with a baked-in **iridescent** sheen (a
+hue-cycling border plus a specular streak — rEFInd has no shader to do that
+live, so it's pre-rendered into the PNG).
 
 ![all ten selection styles](preview.png)
 
@@ -27,8 +27,8 @@ set, the black background, `theme.conf`, the layout — is identical.
 ## Install
 
 ```
-git clone <this repo>
-cd refind-theme
+git clone https://github.com/shoxjaxon-atabayev/refind-prism-minimal.git
+cd refind-prism-minimal
 ./install.sh                       # installs the white variant
 ./install.sh --color obsidian-purple
 ```
@@ -39,11 +39,11 @@ root-only). It:
 1. finds your rEFInd install — checks `/boot`, `/boot/efi`, `/boot/EFI`,
    `/efi` and every mounted FAT volume for a `refind_*.efi` next to a
    `refind.conf`;
-2. copies the theme to `<refind-dir>/themes/rEFInd-minimal/` (the path
-   `theme.conf` already expects), staging the colour you picked as the active
+2. copies the theme to `<refind-dir>/themes/prism-minimal/` (the path
+   `theme.conf` expects), staging the colour you picked as the active
    `selection_big.png` / `selection_small.png`;
 3. adds one managed line to `refind.conf`:
-   `include themes/rEFInd-minimal/theme.conf` — backing the file up first.
+   `include themes/prism-minimal/theme.conf` — backing the file up first.
 
 It never touches EFI boot entries, NVRAM, Secure Boot, or any other
 bootloader. It's safe to re-run: it won't duplicate the include line, and if
@@ -77,14 +77,14 @@ script call `refind-install` for you once.
 
 ## Manual install
 
-1. Copy this directory to `<your ESP>/EFI/refind/themes/rEFInd-minimal/`.
+1. Copy this directory to `<your ESP>/EFI/refind/themes/prism-minimal/`.
 2. Pick a colour: copy `colors/<name>/selection_big.png` and
    `selection_small.png` over the two files of the same name at the top of
    the theme dir. (`white` is already in place.)
 3. Add to `refind.conf`:
 
    ```
-   include themes/rEFInd-minimal/theme.conf
+   include themes/prism-minimal/theme.conf
    ```
 
 If any themed asset is missing, rEFInd falls back to its built-in rendering —
@@ -93,7 +93,7 @@ you always get a usable menu.
 ## Layout
 
 ```
-theme.conf            rEFInd directives (unchanged from rEFInd-minimal)
+theme.conf            rEFInd directives (rEFInd-minimal's, only the theme-dir name differs)
 background.png         the black backdrop (banner_scale fillscreen)
 selection_big.png      active OS-row highlight   — a copy of colors/white/…
 selection_small.png    active tool-row highlight — a copy of colors/white/…
@@ -125,4 +125,3 @@ cp colors/white/selection_small.png selection_small.png
 Icon set and base layout from
 [rEFInd-minimal](https://github.com/EvanPurkhiser/rEFInd-minimal) by Evan
 Purkhiser. Colour + iridescent selection system and installer added here.
-# refind-prism-minimal

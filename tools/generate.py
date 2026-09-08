@@ -4,13 +4,14 @@ Regenerate the selection-highlight assets for every colour variant of the
 Prism Minimal rEFInd theme.
 
 rEFInd draws ``selection_big`` / ``selection_small`` *behind* the focused icon.
-The selection here is **only a circular coloured ring** — nothing inside it, no
-fill, no glow, no sheen. The white icon shows through unchanged; the one bit of
-colour on the screen is the ring around the entry you're about to boot. Both
-rows (OS icons and the tool row) use the same ring.
+The selection here is **only a coloured outline** — nothing inside it, no fill,
+no glow, no sheen. The white icon shows through unchanged.
 
-The three premium variants use an *iridescent* ring: the stroke cycles hue
-around the circle (a holographic-foil look) instead of being one flat colour.
+  * ``selection_big``   (OS row)   — a rounded **square** outline
+  * ``selection_small`` (tool row) — a **circular** outline
+
+The three premium variants use an *iridescent* stroke: the colour cycles hue
+around the outline (a holographic-foil look) instead of being one flat colour.
 rEFInd has no shader to do that at runtime, so it's baked into the PNG.
 
 Output (this script only ever writes here):
@@ -81,18 +82,19 @@ ALL_VARIANTS = list(SIMPLE) + list(PREMIUM)
 
 # --------------------------------------------------------------- geometry --
 
-# The ring is drawn on a canvas the size of the icon cell; the circle is
-# inset a few px so it clears the cell edge. `border` is a touch wider than
-# the visible stroke because rEFInd scales the asset down to icon size
-# (192 / 48 here), which thins it.
+# The outline is drawn on a canvas the size of the icon cell, inset a few px so
+# it clears the edge. `border` is a touch wider than the visible stroke because
+# rEFInd scales the asset down to icon size (192 / 48 here), which thins it.
+#   big   -> rounded square outline for the OS row
+#   small -> circle outline for the tool row
 SPECS = {
-    "big":   dict(px=256, margin=6.0, border=5.5),
-    "small": dict(px=64,  margin=2.0, border=2.6),
+    "big":   dict(px=256, shape="square", margin=8.0, radius=6.0, border=5.5),
+    "small": dict(px=64,  shape="circle", margin=2.0, radius=0.0, border=2.6),
 }
 SS = 4  # supersample factor
 
 BORDER_ALPHA = 1.0
-# Premium: hue cycles *around the ring* (angular). Must be a whole number so
+# Premium: hue cycles *around the outline* (angular). Must be a whole number so
 # the loop closes seamlessly across arctan2's branch cut.
 RING_CYCLES_BIG = 2.0
 RING_CYCLES_SMALL = 1.0
@@ -108,6 +110,18 @@ def hex_rgb(h: str) -> np.ndarray:
 def smoothstep(e0: float, e1: float, x: np.ndarray) -> np.ndarray:
     t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
+
+
+def shape_sdf(shape: str, px: np.ndarray, py: np.ndarray,
+              half: float, r: float) -> np.ndarray:
+    """Signed distance (<0 inside) to a circle or an axis-aligned rounded square
+    centred at the origin."""
+    if shape == "circle":
+        return np.hypot(px, py) - half
+    qx = np.abs(px) - (half - r)
+    qy = np.abs(py) - (half - r)
+    return (np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0))
+            + np.minimum(np.maximum(qx, qy), 0.0) - r)
 
 
 def gradient_lut(stops: list[str], n: int = 1024) -> np.ndarray:
@@ -143,19 +157,24 @@ def render(kind: str, variant: str) -> Image.Image:
     ys, xs = np.mgrid[0:hi, 0:hi].astype(float)
     c = (hi - 1) / 2.0
     px, py = xs - c, ys - c
-    rho = np.hypot(px, py)
 
     outer = (size / 2.0 - spec["margin"]) * SS
     bw = spec["border"] * SS
+    r = spec["radius"] * SS
     aa = 1.1 * SS  # ~0.28 px feather in final pixels — crisp, not aliased
 
-    ring = np.clip(smoothstep(aa, -aa, rho - outer)
-                   - smoothstep(aa, -aa, rho - (outer - bw)), 0.0, 1.0)
+    d_out = shape_sdf(spec["shape"], px, py, outer, r)
+    d_in = shape_sdf(spec["shape"], px, py, outer - bw, max(r - bw, 0.4 * SS))
+    ring = np.clip(smoothstep(aa, -aa, d_out) - smoothstep(aa, -aa, d_in), 0.0, 1.0)
 
     if premium:
         lut = gradient_lut(PREMIUM[variant])
         cycles = RING_CYCLES_BIG if kind == "big" else RING_CYCLES_SMALL
         theta = np.arctan2(py, px) / (2.0 * np.pi) + 0.5
+        # a square perimeter bunches the hue at its corners under a pure angular
+        # map; a touch of diagonal evens it out. A circle doesn't need it.
+        if spec["shape"] == "square":
+            theta = theta + 0.18 * ((xs / hi) * 0.58 + (ys / hi) * 0.42)
         t = np.mod((theta + PREMIUM_PHASE[variant]) * cycles, 1.0)
         stroke_rgb = lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)]
         stroke_rgb = downscale(stroke_rgb, size)
@@ -178,13 +197,18 @@ def build(variant: str) -> None:
 
 
 def make_preview(variants: list[str]) -> None:
-    """Contact sheet: each variant's selection_big behind the white arch icon,
-    exactly the way rEFInd stacks them (selection first, icon on top)."""
-    icon_path = REPO / "icons" / "os_arch.png"
-    if not icon_path.exists():
+    """Contact sheet: per variant, the square selection_big behind the white
+    arch icon (OS row) and, inset bottom-right, the circular selection_small
+    behind a tool icon — icons drawn on top, rEFInd's own order."""
+    os_p = REPO / "icons" / "os_arch.png"
+    tool_p = REPO / "icons" / "func_shutdown.png"
+    if not os_p.exists():
         print("  (skipping preview: icons/os_arch.png not found)")
         return
-    icon = Image.open(icon_path).convert("RGBA").resize((256, 256), Image.LANCZOS)
+    os_icon = Image.open(os_p).convert("RGBA").resize((256, 256), Image.LANCZOS)
+    chip = 92
+    tool_icon = (Image.open(tool_p).convert("RGBA").resize((chip, chip), Image.LANCZOS)
+                 if tool_p.exists() else None)
 
     cell, pad, cols = 256, 24, 5
     rows = (len(variants) + cols - 1) // cols
@@ -197,7 +221,12 @@ def make_preview(variants: list[str]) -> None:
         cy = pad + (i // cols) * (cell + pad)
         tile = Image.new("RGBA", (cell, cell), (11, 11, 13, 255))
         tile.alpha_composite(Image.open(COLORS_DIR / v / "selection_big.png").convert("RGBA"))
-        tile.alpha_composite(icon)
+        tile.alpha_composite(os_icon)
+        if tool_icon is not None:
+            sm = Image.open(COLORS_DIR / v / "selection_small.png").convert("RGBA").resize((chip, chip), Image.LANCZOS)
+            ox, oy = cell - chip - 6, cell - chip - 6
+            tile.alpha_composite(sm, (ox, oy))
+            tile.alpha_composite(tool_icon, (ox, oy))
         sheet.alpha_composite(tile, (cx, cy))
 
     dest = REPO / "preview.png"

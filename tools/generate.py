@@ -4,12 +4,13 @@ Regenerate the selection-highlight assets for every colour variant of the
 Prism Minimal rEFInd theme.
 
 rEFInd draws ``selection_big`` / ``selection_small`` *behind* the focused icon.
-The selection here is **only a square coloured border** — nothing inside it, no
+The selection here is **only a circular coloured ring** — nothing inside it, no
 fill, no glow, no sheen. The white icon shows through unchanged; the one bit of
-colour on the screen is the frame around the entry you're about to boot.
+colour on the screen is the ring around the entry you're about to boot. Both
+rows (OS icons and the tool row) use the same ring.
 
-The three premium variants use an *iridescent* border: the stroke cycles hue
-around the frame (a holographic-foil look) instead of being one flat colour.
+The three premium variants use an *iridescent* ring: the stroke cycles hue
+around the circle (a holographic-foil look) instead of being one flat colour.
 rEFInd has no shader to do that at runtime, so it's baked into the PNG.
 
 Output (this script only ever writes here):
@@ -80,17 +81,18 @@ ALL_VARIANTS = list(SIMPLE) + list(PREMIUM)
 
 # --------------------------------------------------------------- geometry --
 
-# The icon content sits ~50 px inside a 256 px cell (~14 px inside a 64 px
-# cell), so a square inset of ~12 / ~3 px frames the icon with clear air on
-# every side without crowding the cell edge.
+# The ring is drawn on a canvas the size of the icon cell; the circle is
+# inset a few px so it clears the cell edge. `border` is a touch wider than
+# the visible stroke because rEFInd scales the asset down to icon size
+# (192 / 48 here), which thins it.
 SPECS = {
-    "big":   dict(px=256, margin=12.0, radius=4.0, border=4.0),
-    "small": dict(px=64,  margin=3.0,  radius=2.0, border=2.0),
+    "big":   dict(px=256, margin=6.0, border=5.5),
+    "small": dict(px=64,  margin=2.0, border=2.6),
 }
 SS = 4  # supersample factor
 
 BORDER_ALPHA = 1.0
-# Premium: hue cycles *around the frame* (angular). Must be a whole number so
+# Premium: hue cycles *around the ring* (angular). Must be a whole number so
 # the loop closes seamlessly across arctan2's branch cut.
 RING_CYCLES_BIG = 2.0
 RING_CYCLES_SMALL = 1.0
@@ -106,15 +108,6 @@ def hex_rgb(h: str) -> np.ndarray:
 def smoothstep(e0: float, e1: float, x: np.ndarray) -> np.ndarray:
     t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
-
-
-def rounded_rect_sdf(px: np.ndarray, py: np.ndarray, half: float, r: float) -> np.ndarray:
-    """Signed distance to an axis-aligned rounded square centred at 0 (<0 inside)."""
-    qx = np.abs(px) - (half - r)
-    qy = np.abs(py) - (half - r)
-    outside = np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0))
-    inside = np.minimum(np.maximum(qx, qy), 0.0)
-    return outside + inside - r
 
 
 def gradient_lut(stops: list[str], n: int = 1024) -> np.ndarray:
@@ -150,22 +143,20 @@ def render(kind: str, variant: str) -> Image.Image:
     ys, xs = np.mgrid[0:hi, 0:hi].astype(float)
     c = (hi - 1) / 2.0
     px, py = xs - c, ys - c
+    rho = np.hypot(px, py)
 
-    half = (size / 2.0 - spec["margin"]) * SS
-    r = spec["radius"] * SS
+    outer = (size / 2.0 - spec["margin"]) * SS
     bw = spec["border"] * SS
     aa = 1.1 * SS  # ~0.28 px feather in final pixels — crisp, not aliased
 
-    d_out = rounded_rect_sdf(px, py, half, r)
-    d_in = rounded_rect_sdf(px, py, half - bw, max(r - bw, 0.4 * SS))
-    ring = np.clip(smoothstep(aa, -aa, d_out) - smoothstep(aa, -aa, d_in), 0.0, 1.0)
+    ring = np.clip(smoothstep(aa, -aa, rho - outer)
+                   - smoothstep(aa, -aa, rho - (outer - bw)), 0.0, 1.0)
 
     if premium:
         lut = gradient_lut(PREMIUM[variant])
         cycles = RING_CYCLES_BIG if kind == "big" else RING_CYCLES_SMALL
-        diag = (xs / hi) * 0.58 + (ys / hi) * 0.42
         theta = np.arctan2(py, px) / (2.0 * np.pi) + 0.5
-        t = np.mod((theta + 0.18 * diag + PREMIUM_PHASE[variant]) * cycles, 1.0)
+        t = np.mod((theta + PREMIUM_PHASE[variant]) * cycles, 1.0)
         stroke_rgb = lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)]
         stroke_rgb = downscale(stroke_rgb, size)
     else:
@@ -227,9 +218,10 @@ def make_menu_preview(variants: list[str]) -> None:
         print("  (skipping menu preview: not enough icons)")
         return
 
+    # icon sizes here track theme.conf's 192 / 48 at ~0.44 px-per-rEFInd-px
     W, strip_h = 1280, 300
-    big, small = 96, 44
-    gap_big, gap_small = 88, 64
+    big, small = 84, 40
+    gap_big, gap_small = 96, 72
     sel_os, sel_tool = 1, 0
 
     panel = Image.new("RGB", (W, strip_h * len(variants)), (0, 0, 0))

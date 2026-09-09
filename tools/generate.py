@@ -94,11 +94,12 @@ WHITE_ON_LIGHT = "#2B2B2D"   # the "white" variant's ink on the light background
 ICON_CONTENT = 0.58
 
 # The outline canvas is 256 / 64; rEFInd scales it to big_icon_size /
-# small_icon_size (200 / 50 in theme.conf). `margin` is tuned so the outline
-# sits just outside the re-padded icon; `border` is ~1.4x the on-screen stroke.
+# small_icon_size (200 / 50 in theme.conf) — ~0.78x — so `border` is a bit
+# more than the thin on-screen stroke. `margin` keeps the outline just
+# outside the re-padded icon.
 SPECS = {
-    "big":   dict(px=256, shape="square", margin=34.0, radius=7.0, border=5.0),
-    "small": dict(px=64,  shape="circle", margin=9.0, radius=0.0, border=3.0),
+    "big":   dict(px=256, shape="square", margin=34.0, radius=7.0, border=3.4),
+    "small": dict(px=64,  shape="circle", margin=9.0, radius=0.0, border=2.3),
 }
 SS = 4  # supersample factor
 BORDER_ALPHA = 1.0

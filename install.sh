@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Prism Minimal — installer for a minimal rEFInd boot theme with colour variants.
 #
-#   ./install.sh                    detect rEFInd, install the "white" variant
+#   ./install.sh                    detect rEFInd, install white on a dark background
 #   ./install.sh --color blue       install (or just restyle) to a colour
-#   ./install.sh --list-colors      list the available colour variants
+#   ./install.sh --background light  put it on a near-white background instead
+#   ./install.sh --list             list the available colours and backgrounds
 #   ./install.sh --dry-run          print the plan, change nothing
 #   ./install.sh --yes              skip the confirmation prompt
 #   ./install.sh --refind-dir PATH  skip detection; PATH is the dir with refind.conf
@@ -37,14 +38,16 @@ INCLUDE_LINE="include ${THEME_SUBDIR}/theme.conf"
 MARKER_BEGIN="# BEGIN Prism Minimal (managed by install.sh — do not edit this block by hand)"
 MARKER_END="# END Prism Minimal"
 DEFAULT_COLOR="white"
+DEFAULT_BG="dark"
 
 COLOR="$DEFAULT_COLOR"
+BG="$DEFAULT_BG"
 REFIND_DIR_OVERRIDE=""
 DRY_RUN=0
 ASSUME_YES=0
 UNINSTALL=0
 DEPLOY_REFIND=0
-LIST_COLORS=0
+LIST=0
 
 # --------------------------------------------------------------- output --
 
@@ -90,6 +93,15 @@ normalise_color() {
   printf '%s\n' "$1" | tr '[:upper:] _' '[:lower:]--'
 }
 
+# dark|light, tolerant of black/white/… synonyms
+normalise_bg() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    light | white | l) echo light ;;
+    dark  | black | d | "") echo dark ;;
+    *) echo "$1" ;;
+  esac
+}
+
 available_colors() {
   local d
   for d in "$SCRIPT_DIR"/colors/*/; do
@@ -99,15 +111,26 @@ available_colors() {
   done | sort
 }
 
+# The dir holding selection_big/small.png + icons/ for the chosen colour+bg.
+look_dir() {
+  if [ "$BG" = "light" ]; then
+    printf '%s\n' "$SCRIPT_DIR/colors/$COLOR/light"
+  else
+    printf '%s\n' "$SCRIPT_DIR/colors/$COLOR"
+  fi
+}
+
+bg_image() { printf '%s\n' "$SCRIPT_DIR/backgrounds/$BG.png"; }
+
 color_note() {
   case "$1" in
-    white)                echo "default — clean white border" ;;
+    white)           echo "the default — plain white / dark ink" ;;
     green|red|violet|pink|gray|blue)
-                          echo "flat $1 border + tinted tile" ;;
-    obsidian-purple)      echo "premium · iridescent violet→magenta→teal" ;;
-    titanium-silver)      echo "premium · iridescent brushed silver" ;;
-    champagne-gold)       echo "premium · iridescent warm gold foil" ;;
-    *)                    echo "" ;;
+                     echo "flat $1" ;;
+    obsidian-purple) echo "premium · iridescent violet→magenta→teal" ;;
+    titanium-silver) echo "premium · iridescent brushed silver" ;;
+    champagne-gold)  echo "premium · iridescent warm gold foil" ;;
+    *)               echo "" ;;
   esac
 }
 
@@ -268,38 +291,31 @@ strip_block() {
 
 # ------------------------------------------------------------- validate --
 
-# The icon set for the chosen colour: colors/<colour>/icons/ (the whole set
-# recoloured to that hue) if present, else the repo's plain icons/ — that's
-# what "white" uses.
-icons_src() {
-  if [ -d "$SCRIPT_DIR/colors/$COLOR/icons" ]; then
-    printf '%s\n' "$SCRIPT_DIR/colors/$COLOR/icons"
-  else
-    printf '%s\n' "$SCRIPT_DIR/icons"
-  fi
-}
-
 validate_source() {
   step "checking theme source"
   local missing=0 f
-  for f in theme.conf background.png; do
-    [ -f "$SCRIPT_DIR/$f" ] || { warn "missing: $f"; missing=1; }
-  done
-  [ -d "$SCRIPT_DIR/icons" ] || { warn "missing: icons/"; missing=1; }
+  [ -f "$SCRIPT_DIR/theme.conf" ] || { warn "missing: theme.conf"; missing=1; }
   [ -d "$SCRIPT_DIR/colors" ] || { warn "missing: colors/"; missing=1; }
-  ls "$SCRIPT_DIR"/icons/*.png >/dev/null 2>&1 || { warn "icons/ has no PNGs"; missing=1; }
+  [ -d "$SCRIPT_DIR/backgrounds" ] || { warn "missing: backgrounds/"; missing=1; }
   [ "$missing" -eq 0 ] \
     || die "theme source is incomplete — run this from inside the refind-prism-minimal checkout."
+
+  case "$BG" in
+    dark | light) ;;
+    *) die "unknown --background '$BG' (use: dark, light)." ;;
+  esac
+  [ -f "$(bg_image)" ] || die "$(bg_image) missing — regenerate with tools/generate.py."
 
   if ! available_colors | grep -qx "$COLOR"; then
     warn "colour '$COLOR' not found. Available:"
     available_colors | sed 's/^/    /' >&2
-    die "pick one with --color, or run --list-colors."
+    die "pick one with --color, or run --list."
   fi
-  local isrc; isrc="$(icons_src)"
-  ls "$isrc"/*.png >/dev/null 2>&1 \
-    || die "$isrc has no PNGs — regenerate with tools/generate.py."
-  ok "source OK — colour: $COLOR  (icons: ${isrc#"$SCRIPT_DIR"/})"
+  local ld; ld="$(look_dir)"
+  { [ -f "$ld/selection_big.png" ] && [ -f "$ld/selection_small.png" ] \
+      && ls "$ld"/icons/*.png >/dev/null 2>&1; } \
+    || die "$ld is incomplete — regenerate with tools/generate.py."
+  ok "source OK — colour: $COLOR · background: $BG"
 }
 
 # After copying, make sure every path theme.conf points at actually resolves
@@ -323,19 +339,19 @@ validate_installed() {
 # write (same files, same chosen colour) — lets a re-run skip the ESP copy
 # entirely instead of churning FAT files and rotating a backup every time.
 theme_files_current() {
-  local target="$1" f rel src
+  local target="$1" f rel ld
   [ -d "$target" ] || return 1
-  cmp -s "$SCRIPT_DIR/theme.conf"      "$target/theme.conf"      || return 1
-  cmp -s "$SCRIPT_DIR/background.png"  "$target/background.png"  || return 1
-  cmp -s "$SCRIPT_DIR/colors/$COLOR/selection_big.png"   "$target/selection_big.png"   || return 1
-  cmp -s "$SCRIPT_DIR/colors/$COLOR/selection_small.png" "$target/selection_small.png" || return 1
-  src="$(icons_src)"
-  [ "$(find "$src" -maxdepth 1 -type f | wc -l)" \
+  ld="$(look_dir)"
+  cmp -s "$SCRIPT_DIR/theme.conf"        "$target/theme.conf"          || return 1
+  cmp -s "$(bg_image)"                   "$target/background.png"      || return 1
+  cmp -s "$ld/selection_big.png"         "$target/selection_big.png"   || return 1
+  cmp -s "$ld/selection_small.png"       "$target/selection_small.png" || return 1
+  [ "$(find "$ld/icons" -maxdepth 1 -type f | wc -l)" \
       -eq "$(find "$target/icons" -maxdepth 1 -type f 2>/dev/null | wc -l)" ] || return 1
   while IFS= read -r f; do
-    rel="${f#"$src"/}"
+    rel="${f#"$ld"/icons/}"
     cmp -s "$f" "$target/icons/$rel" || return 1
-  done < <(find "$src" -type f)
+  done < <(find "$ld/icons" -type f)
   return 0
 }
 
@@ -359,6 +375,7 @@ do_install() {
   step "plan"
   info "install theme to : $target"
   info "colour           : $COLOR  ($(color_note "$COLOR"))"
+  info "background        : $BG"
   info "refind.conf       : $conf"
   info "managed line      : $INCLUDE_LINE"
   if [ "$fresh" -eq 0 ]; then
@@ -392,11 +409,12 @@ do_install() {
     # plain cp only — never cp -a/-p and never `install -m`: the ESP is FAT,
     # which has no per-file ownership or mode, so anything that tries to
     # chown/chmod a file there is at best a no-op and at worst an error.
-    cp "$SCRIPT_DIR/theme.conf"     "$target/theme.conf"
-    cp "$SCRIPT_DIR/background.png" "$target/background.png"
-    cp -r "$(icons_src)" "$target/icons"   # the icon set recoloured for this colour
-    cp "$SCRIPT_DIR/colors/$COLOR/selection_big.png"   "$target/selection_big.png"
-    cp "$SCRIPT_DIR/colors/$COLOR/selection_small.png" "$target/selection_small.png"
+    local ld; ld="$(look_dir)"
+    cp "$SCRIPT_DIR/theme.conf" "$target/theme.conf"
+    cp "$(bg_image)"            "$target/background.png"
+    cp -r "$ld/icons"           "$target/icons"   # the set recoloured for this colour+bg
+    cp "$ld/selection_big.png"   "$target/selection_big.png"
+    cp "$ld/selection_small.png" "$target/selection_small.png"
     ok "copied theme to $target"
   else
     step "theme files already current — skipping copy"
@@ -441,9 +459,9 @@ do_install() {
 
   trap - EXIT
   step "done"
-  ok "Prism Minimal installed · colour: $COLOR"
-  info "reboot to see it. Change colour any time:  sudo $SELF --color <name>"
-  info "remove it entirely:                        sudo $SELF --uninstall"
+  ok "Prism Minimal installed · colour: $COLOR · background: $BG"
+  info "reboot to see it. Restyle any time:  sudo $SELF --color <name> --background <dark|light>"
+  info "remove it entirely:                 sudo $SELF --uninstall"
 }
 
 # ----------------------------------------------------------- uninstall --
@@ -503,23 +521,27 @@ do_uninstall() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --color)         COLOR="$(normalise_color "${2:-}")"; shift 2 ;;
-    --color=*)       COLOR="$(normalise_color "${1#*=}")"; shift ;;
-    --refind-dir)    REFIND_DIR_OVERRIDE="${2:-}"; shift 2 ;;
-    --refind-dir=*)  REFIND_DIR_OVERRIDE="${1#*=}"; shift ;;
-    --dry-run)       DRY_RUN=1; shift ;;
-    --yes | -y)      ASSUME_YES=1; shift ;;
-    --deploy-refind) DEPLOY_REFIND=1; shift ;;
-    --uninstall)     UNINSTALL=1; shift ;;
-    --list-colors)   LIST_COLORS=1; shift ;;
-    -h | --help)     usage; trap - EXIT; exit 0 ;;
-    *)               die "unknown option: $1  (see --help)" ;;
+    --color)            COLOR="$(normalise_color "${2:-}")"; shift 2 ;;
+    --color=*)          COLOR="$(normalise_color "${1#*=}")"; shift ;;
+    --background | --bg) BG="$(normalise_bg "${2:-}")"; shift 2 ;;
+    --background=* | --bg=*) BG="$(normalise_bg "${1#*=}")"; shift ;;
+    --refind-dir)       REFIND_DIR_OVERRIDE="${2:-}"; shift 2 ;;
+    --refind-dir=*)     REFIND_DIR_OVERRIDE="${1#*=}"; shift ;;
+    --dry-run)          DRY_RUN=1; shift ;;
+    --yes | -y)         ASSUME_YES=1; shift ;;
+    --deploy-refind)    DEPLOY_REFIND=1; shift ;;
+    --uninstall)        UNINSTALL=1; shift ;;
+    --list | --list-colors) LIST=1; shift ;;
+    -h | --help)        usage; trap - EXIT; exit 0 ;;
+    *)                  die "unknown option: $1  (see --help)" ;;
   esac
 done
 
-if [ "$LIST_COLORS" -eq 1 ]; then
-  printf '%savailable colours%s  (use with --color)\n\n' "$_b" "$_x"
+if [ "$LIST" -eq 1 ]; then
+  printf '%scolours%s  (--color)\n\n' "$_b" "$_x"
   while IFS= read -r c; do printf '  %-16s %s\n' "$c" "$(color_note "$c")"; done < <(available_colors)
+  printf '\n%sbackgrounds%s  (--background)\n\n  %-16s %s\n  %-16s %s\n' \
+    "$_b" "$_x" dark "black (default)" light "near-white; icons + outline go dark"
   trap - EXIT
   exit 0
 fi

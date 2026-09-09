@@ -2,14 +2,16 @@
 
 A dark, ultra-minimal [rEFInd](https://www.rodsbooks.com/refind/) boot theme —
 pure-black background, white silhouette OS icons, no panels, no labels. The
-**selected** entry is marked by one thing only: a thin coloured outline around
-it — a **square** on the OS row, a **circle** on the tool row. No fill, no
-glow, no sheen; the white icon shows through untouched.
+**selected** entry gets a coloured cell: a translucent fill plus a thin
+outline — a **square** on the OS row, a **circle** on the tool row. rEFInd
+draws that only behind the focused entry, so the selected OS/tool reads as
+"that colour" while every other icon stays plain white; no icon PNG is
+touched. No glow, no sheen — just fill + outline.
 
 It ships in **10 colours** — hence *Prism*. Six flat ones and a plain white
-default; three "premium" ones whose outline is **iridescent** — the stroke
-cycles hue around it like holographic foil (rEFInd has no shader to do that
-live, so it's pre-rendered into the PNG).
+default; three "premium" ones that are **iridescent** — the fill and outline
+cycle hue like holographic foil (rEFInd has no shader to do that live, so it's
+pre-rendered into the PNG).
 
 ![all ten selection styles](preview.png)
 
@@ -21,10 +23,9 @@ live, so it's pre-rendered into the PNG).
 
 ![white / blue / obsidian-purple in a mock menu](preview-menu.png)
 
-Only the outline carries the colour. rEFInd draws the same icon PNG whether an
-entry is focused or not, so the icons themselves never change — the icon set,
-the black background, `theme.conf` and the layout are identical across every
-colour.
+The colour lives entirely in `selection_big.png` / `selection_small.png`. The
+icon set, the black background, `theme.conf` and the layout are identical
+across every colour — switching colour only swaps those two PNGs.
 
 ## Install
 

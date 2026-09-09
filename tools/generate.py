@@ -98,6 +98,12 @@ SPECS = {
 SS = 4  # supersample factor
 
 BORDER_ALPHA = 1.0
+# A flat colour wash inside the outline. rEFInd only draws selection_* behind
+# the *focused* entry, so this fill is what makes the selected OS/tool read as
+# "that colour" while every other icon stays plain white — no icon PNG is ever
+# recoloured. No glow, no sheen; just fill + stroke.
+FILL_ALPHA_SIMPLE = 0.42
+FILL_ALPHA_PREMIUM = 0.36
 # Premium: hue cycles *around the outline* (angular). Must be a whole number so
 # the loop closes seamlessly across arctan2's branch cut.
 RING_CYCLES_BIG = 2.0
@@ -168,8 +174,9 @@ def render(kind: str, variant: str) -> Image.Image:
     aa = 1.1 * SS  # ~0.28 px feather in final pixels — crisp, not aliased
 
     d_out = shape_sdf(spec["shape"], px, py, outer, r)
-    d_in = shape_sdf(spec["shape"], px, py, outer - bw, max(r - bw, 0.4 * SS))
-    ring = np.clip(smoothstep(aa, -aa, d_out) - smoothstep(aa, -aa, d_in), 0.0, 1.0)
+    d_mid = shape_sdf(spec["shape"], px, py, outer - bw, max(r - bw, 0.4 * SS))
+    ring = np.clip(smoothstep(aa, -aa, d_out) - smoothstep(aa, -aa, d_mid), 0.0, 1.0)
+    core = smoothstep(aa, -aa, d_mid)  # 1 inside the outline (the fill area)
 
     if premium:
         lut = gradient_lut(PREMIUM[variant])
@@ -180,13 +187,28 @@ def render(kind: str, variant: str) -> Image.Image:
         if spec["shape"] == "square":
             theta = theta + 0.18 * ((xs / hi) * 0.58 + (ys / hi) * 0.42)
         t = np.mod((theta + PREMIUM_PHASE[variant]) * cycles, 1.0)
-        stroke_rgb = lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)]
-        stroke_rgb = downscale(stroke_rgb, size)
+        stroke_rgb = downscale(lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)], size)
+        # fill: a gentle diagonal sweep of the same palette
+        d = np.mod((xs / hi) * 0.62 + (ys / hi) * 0.38 + PREMIUM_PHASE[variant], 1.0)
+        fill_rgb = downscale(lut[np.clip((d * len(lut)).astype(int), 0, len(lut) - 1)], size)
+        fill_a = FILL_ALPHA_PREMIUM
     else:
-        stroke_rgb = np.broadcast_to(hex_rgb(SIMPLE[variant]), (size, size, 3)).copy()
+        col = hex_rgb(SIMPLE[variant])
+        stroke_rgb = np.broadcast_to(col, (size, size, 3)).astype(float)
+        fill_rgb = np.broadcast_to(col, (size, size, 3)).astype(float)
+        # white would be a heavy grey box at the normal alpha — keep it light
+        fill_a = 0.24 if variant == "white" else FILL_ALPHA_SIMPLE
 
-    alpha = downscale(ring, size) * BORDER_ALPHA
-    rgba = np.clip(np.dstack([stroke_rgb, alpha]), 0.0, 1.0)
+    ring_a = downscale(ring, size) * BORDER_ALPHA
+    core_a = downscale(core, size) * fill_a
+
+    # composite: fill first, stroke over it (premultiplied, then un-premultiply)
+    pm = fill_rgb * core_a[..., None]
+    a = core_a
+    pm = stroke_rgb * ring_a[..., None] + pm * (1.0 - ring_a)[..., None]
+    a = ring_a + a * (1.0 - ring_a)
+    rgb = np.divide(pm, a[..., None], out=np.zeros_like(pm), where=a[..., None] > 1e-6)
+    rgba = np.clip(np.dstack([rgb, a]), 0.0, 1.0)
     return Image.fromarray((rgba * 255.0 + 0.5).astype(np.uint8), "RGBA")
 
 

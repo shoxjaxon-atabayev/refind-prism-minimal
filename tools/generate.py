@@ -33,7 +33,6 @@ Dependencies: Pillow, numpy   (dev-only — never shipped to the ESP).
 
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 
@@ -191,64 +190,28 @@ def render(kind: str, variant: str) -> Image.Image:
     return Image.fromarray((rgba * 255.0 + 0.5).astype(np.uint8), "RGBA")
 
 
-# ------------------------------------------------------------- icon tint --
-
-def recolor_icon(src: Image.Image, variant: str) -> Image.Image:
-    """Replace an icon's colour with the variant's, keeping its shape/alpha.
-    Simple variants get a flat fill; premium variants get the same iridescent
-    hue-cycling gradient as their outline (a diagonal sweep across the icon)."""
-    a = np.asarray(src.convert("RGBA"), dtype=float) / 255.0
-    alpha = a[..., 3]
-    h, w = alpha.shape
-    if variant in PREMIUM:
-        lut = gradient_lut(PREMIUM[variant])
-        ys, xs = np.mgrid[0:h, 0:w].astype(float)
-        t = np.mod(((xs / max(w - 1, 1)) * 0.62 + (ys / max(h - 1, 1)) * 0.38)
-                   * 1.25 + PREMIUM_PHASE[variant], 1.0)
-        rgb = lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)]
-    else:
-        rgb = np.broadcast_to(hex_rgb(SIMPLE[variant]), (h, w, 3))
-    out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
-    return Image.fromarray((out * 255.0 + 0.5).astype(np.uint8), "RGBA")
-
-
-def build_icons(variant: str) -> int:
-    """Write colors/<variant>/icons/. 'white' is skipped — it uses the repo's
-    icons/ unchanged (the installer falls back to it)."""
-    if variant == "white":
-        return 0
-    dst = COLORS_DIR / variant / "icons"
-    dst.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for f in sorted(ICONS_DIR.glob("*.png")):
-        recolor_icon(Image.open(f), variant).save(dst / f.name, optimize=True)
-        n += 1
-    return n
-
-
-def variant_icon(variant: str, name: str) -> Image.Image:
-    p = COLORS_DIR / variant / "icons" / name
-    if not p.exists():
-        p = ICONS_DIR / name
-    return Image.open(p).convert("RGBA")
-
-
 # ----------------------------------------------------------------- driver --
+
+def icon(name: str) -> Image.Image:
+    """The theme's icon — one set, never recoloured. rEFInd draws the same PNG
+    whether the entry is focused or not, so the icons stay as-is; only the
+    selection_* outline carries the colour."""
+    return Image.open(ICONS_DIR / name).convert("RGBA")
+
 
 def build(variant: str) -> None:
     out = COLORS_DIR / variant
     out.mkdir(parents=True, exist_ok=True)
     render("big", variant).save(out / "selection_big.png", optimize=True)
     render("small", variant).save(out / "selection_small.png", optimize=True)
-    n = build_icons(variant)
-    tail = f" + {n} icons" if n else "  (icons: repo default)"
-    print(f"  {variant:16s} -> {out.relative_to(REPO)}/{tail}")
+    print(f"  {variant:16s} -> {out.relative_to(REPO)}/")
 
 
 def make_preview(variants: list[str]) -> None:
-    """Contact sheet: per variant, its (recoloured) arch icon inside the square
-    selection_big, and inset bottom-right its tool icon inside the circular
-    selection_small — icons drawn on top, rEFInd's own order."""
+    """Contact sheet: per variant, the white arch icon inside the square
+    selection_big, and inset bottom-right the tool icon inside the circular
+    selection_small — icons drawn on top, rEFInd's own order. Only the
+    outline changes colour; the icons are the same every time."""
     if not (ICONS_DIR / "os_arch.png").exists():
         print("  (skipping preview: icons/os_arch.png not found)")
         return
@@ -264,12 +227,12 @@ def make_preview(variants: list[str]) -> None:
         cy = pad + (i // cols) * (cell + pad)
         tile = Image.new("RGBA", (cell, cell), (11, 11, 13, 255))
         tile.alpha_composite(Image.open(COLORS_DIR / v / "selection_big.png").convert("RGBA"))
-        tile.alpha_composite(variant_icon(v, "os_arch.png").resize((256, 256), Image.LANCZOS))
+        tile.alpha_composite(icon("os_arch.png").resize((256, 256), Image.LANCZOS))
         if (ICONS_DIR / "func_shutdown.png").exists():
             sm = Image.open(COLORS_DIR / v / "selection_small.png").convert("RGBA").resize((chip, chip), Image.LANCZOS)
             ox, oy = cell - chip - 6, cell - chip - 6
             tile.alpha_composite(sm, (ox, oy))
-            tile.alpha_composite(variant_icon(v, "func_shutdown.png").resize((chip, chip), Image.LANCZOS), (ox, oy))
+            tile.alpha_composite(icon("func_shutdown.png").resize((chip, chip), Image.LANCZOS), (ox, oy))
         sheet.alpha_composite(tile, (cx, cy))
 
     dest = REPO / "preview.png"
@@ -309,7 +272,7 @@ def make_menu_preview(variants: list[str]) -> None:
             x = x0 + i * (big + gap_big)
             if i == sel_os:
                 strip.alpha_composite(sel_b, (x, y_os))
-            strip.alpha_composite(variant_icon(v, f"{n}.png").resize((big, big), Image.LANCZOS), (x, y_os))
+            strip.alpha_composite(icon(f"{n}.png").resize((big, big), Image.LANCZOS), (x, y_os))
 
         tx0 = (W - (len(tool_names) * small + (len(tool_names) - 1) * gap_small)) // 2
         y_tool = y_os + big + 60
@@ -317,7 +280,7 @@ def make_menu_preview(variants: list[str]) -> None:
             x = tx0 + i * (small + gap_small)
             if i == sel_tool:
                 strip.alpha_composite(sel_s, (x, y_tool))
-            strip.alpha_composite(variant_icon(v, f"{n}.png").resize((small, small), Image.LANCZOS), (x, y_tool))
+            strip.alpha_composite(icon(f"{n}.png").resize((small, small), Image.LANCZOS), (x, y_tool))
 
         panel.paste(strip.convert("RGB"), (0, row * strip_h))
 

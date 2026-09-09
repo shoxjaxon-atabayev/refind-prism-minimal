@@ -3,25 +3,24 @@
 Regenerate the selection-highlight assets for every colour variant of the
 Prism Minimal rEFInd theme.
 
-rEFInd draws ``selection_big`` / ``selection_small`` *behind* the focused icon.
-The selection here is **only a coloured outline** — nothing inside it, no fill,
-no glow, no sheen. The white icon shows through unchanged.
+Each colour is: a coloured **outline** (``selection_big`` = rounded square for
+the OS row, ``selection_small`` = circle for the tool row) **plus the whole
+icon set recoloured to the same hue**. rEFInd can't tint just the focused
+icon, so the entire set takes the colour — pick "red" and every icon and the
+outline are red. The box interior stays empty; no fill, no glow, no sheen.
 
-  * ``selection_big``   (OS row)   — a rounded **square** outline
-  * ``selection_small`` (tool row) — a **circular** outline
-
-The three premium variants use an *iridescent* stroke: the colour cycles hue
-around the outline (a holographic-foil look) instead of being one flat colour.
-rEFInd has no shader to do that at runtime, so it's baked into the PNG.
+Premium variants are *iridescent*: the outline and the icons carry a
+hue-cycling gradient (a holographic-foil look), baked in since rEFInd has no
+shader.
 
 Output (this script only ever writes here):
 
     colors/<variant>/selection_big.png     256x256  RGBA
     colors/<variant>/selection_small.png    64x64   RGBA
+    colors/<variant>/icons/*.png            (recoloured; "white" is skipped)
 
-``install.sh --color <variant>`` copies the chosen pair over
-``selection_big.png`` / ``selection_small.png`` at the theme root — the exact
-paths ``theme.conf`` references, which never change. ``white`` is the default.
+``install.sh --color <variant>`` installs that pair plus the matching icon set.
+``white`` is the default and keeps the original icons.
 
 Usage:
     python3 tools/generate.py                 # regenerate every variant
@@ -98,12 +97,6 @@ SPECS = {
 SS = 4  # supersample factor
 
 BORDER_ALPHA = 1.0
-# A flat colour wash inside the outline. rEFInd only draws selection_* behind
-# the *focused* entry, so this fill is what makes the selected OS/tool read as
-# "that colour" while every other icon stays plain white — no icon PNG is ever
-# recoloured. No glow, no sheen; just fill + stroke.
-FILL_ALPHA_SIMPLE = 0.42
-FILL_ALPHA_PREMIUM = 0.36
 # Premium: hue cycles *around the outline* (angular). Must be a whole number so
 # the loop closes seamlessly across arctan2's branch cut.
 RING_CYCLES_BIG = 2.0
@@ -174,9 +167,8 @@ def render(kind: str, variant: str) -> Image.Image:
     aa = 1.1 * SS  # ~0.28 px feather in final pixels — crisp, not aliased
 
     d_out = shape_sdf(spec["shape"], px, py, outer, r)
-    d_mid = shape_sdf(spec["shape"], px, py, outer - bw, max(r - bw, 0.4 * SS))
-    ring = np.clip(smoothstep(aa, -aa, d_out) - smoothstep(aa, -aa, d_mid), 0.0, 1.0)
-    core = smoothstep(aa, -aa, d_mid)  # 1 inside the outline (the fill area)
+    d_in = shape_sdf(spec["shape"], px, py, outer - bw, max(r - bw, 0.4 * SS))
+    ring = np.clip(smoothstep(aa, -aa, d_out) - smoothstep(aa, -aa, d_in), 0.0, 1.0)
 
     if premium:
         lut = gradient_lut(PREMIUM[variant])
@@ -188,52 +180,72 @@ def render(kind: str, variant: str) -> Image.Image:
             theta = theta + 0.18 * ((xs / hi) * 0.58 + (ys / hi) * 0.42)
         t = np.mod((theta + PREMIUM_PHASE[variant]) * cycles, 1.0)
         stroke_rgb = downscale(lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)], size)
-        # fill: a gentle diagonal sweep of the same palette
-        d = np.mod((xs / hi) * 0.62 + (ys / hi) * 0.38 + PREMIUM_PHASE[variant], 1.0)
-        fill_rgb = downscale(lut[np.clip((d * len(lut)).astype(int), 0, len(lut) - 1)], size)
-        fill_a = FILL_ALPHA_PREMIUM
     else:
-        col = hex_rgb(SIMPLE[variant])
-        stroke_rgb = np.broadcast_to(col, (size, size, 3)).astype(float)
-        fill_rgb = np.broadcast_to(col, (size, size, 3)).astype(float)
-        # white would be a heavy grey box at the normal alpha — keep it light
-        fill_a = 0.24 if variant == "white" else FILL_ALPHA_SIMPLE
+        stroke_rgb = np.broadcast_to(hex_rgb(SIMPLE[variant]), (size, size, 3)).copy()
 
-    ring_a = downscale(ring, size) * BORDER_ALPHA
-    core_a = downscale(core, size) * fill_a
-
-    # composite: fill first, stroke over it (premultiplied, then un-premultiply)
-    pm = fill_rgb * core_a[..., None]
-    a = core_a
-    pm = stroke_rgb * ring_a[..., None] + pm * (1.0 - ring_a)[..., None]
-    a = ring_a + a * (1.0 - ring_a)
-    rgb = np.divide(pm, a[..., None], out=np.zeros_like(pm), where=a[..., None] > 1e-6)
-    rgba = np.clip(np.dstack([rgb, a]), 0.0, 1.0)
+    alpha = downscale(ring, size) * BORDER_ALPHA
+    rgba = np.clip(np.dstack([stroke_rgb, alpha]), 0.0, 1.0)
     return Image.fromarray((rgba * 255.0 + 0.5).astype(np.uint8), "RGBA")
 
 
+# ------------------------------------------------------------- icon tint --
+
+# rEFInd can't recolour just the focused icon, so the whole set is recoloured
+# per variant: pick "red" and every icon (and the outline) is red. Flat colours
+# get a flat tint; premium variants get the same iridescent gradient as their
+# outline. The box interior stays empty — only the icon glyph and the stroke
+# carry the colour. "white" keeps the original icons untouched.
+
+def recolor_icon(src: Image.Image, variant: str) -> Image.Image:
+    a = np.asarray(src.convert("RGBA"), dtype=float) / 255.0
+    alpha = a[..., 3]
+    h, w = alpha.shape
+    if variant in PREMIUM:
+        lut = gradient_lut(PREMIUM[variant])
+        ys, xs = np.mgrid[0:h, 0:w].astype(float)
+        t = np.mod(((xs / max(w - 1, 1)) * 0.62 + (ys / max(h - 1, 1)) * 0.38)
+                   * 1.25 + PREMIUM_PHASE[variant], 1.0)
+        rgb = lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)]
+    else:
+        rgb = np.broadcast_to(hex_rgb(SIMPLE[variant]), (h, w, 3))
+    out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
+    return Image.fromarray((out * 255.0 + 0.5).astype(np.uint8), "RGBA")
+
+
+def build_icons(variant: str) -> int:
+    if variant == "white":
+        return 0  # white reuses the top-level icons/
+    dst = COLORS_DIR / variant / "icons"
+    dst.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for f in sorted(ICONS_DIR.glob("*.png")):
+        recolor_icon(Image.open(f), variant).save(dst / f.name, optimize=True)
+        n += 1
+    return n
+
+
+def variant_icon(variant: str, name: str) -> Image.Image:
+    p = COLORS_DIR / variant / "icons" / name
+    if not p.exists():
+        p = ICONS_DIR / name
+    return Image.open(p).convert("RGBA")
+
+
 # ----------------------------------------------------------------- driver --
-
-def icon(name: str) -> Image.Image:
-    """The theme's icon — one set, never recoloured. rEFInd draws the same PNG
-    whether the entry is focused or not, so the icons stay as-is; only the
-    selection_* outline carries the colour."""
-    return Image.open(ICONS_DIR / name).convert("RGBA")
-
 
 def build(variant: str) -> None:
     out = COLORS_DIR / variant
     out.mkdir(parents=True, exist_ok=True)
     render("big", variant).save(out / "selection_big.png", optimize=True)
     render("small", variant).save(out / "selection_small.png", optimize=True)
-    print(f"  {variant:16s} -> {out.relative_to(REPO)}/")
+    n = build_icons(variant)
+    print(f"  {variant:16s} -> {out.relative_to(REPO)}/" + (f"  + {n} icons" if n else ""))
 
 
 def make_preview(variants: list[str]) -> None:
-    """Contact sheet: per variant, the white arch icon inside the square
-    selection_big, and inset bottom-right the tool icon inside the circular
-    selection_small — icons drawn on top, rEFInd's own order. Only the
-    outline changes colour; the icons are the same every time."""
+    """Contact sheet: per variant, its recoloured arch icon inside the square
+    selection_big, and inset bottom-right its tool icon inside the circular
+    selection_small — icons drawn on top, rEFInd's own order."""
     if not (ICONS_DIR / "os_arch.png").exists():
         print("  (skipping preview: icons/os_arch.png not found)")
         return
@@ -249,12 +261,12 @@ def make_preview(variants: list[str]) -> None:
         cy = pad + (i // cols) * (cell + pad)
         tile = Image.new("RGBA", (cell, cell), (11, 11, 13, 255))
         tile.alpha_composite(Image.open(COLORS_DIR / v / "selection_big.png").convert("RGBA"))
-        tile.alpha_composite(icon("os_arch.png").resize((256, 256), Image.LANCZOS))
+        tile.alpha_composite(variant_icon(v, "os_arch.png").resize((256, 256), Image.LANCZOS))
         if (ICONS_DIR / "func_shutdown.png").exists():
             sm = Image.open(COLORS_DIR / v / "selection_small.png").convert("RGBA").resize((chip, chip), Image.LANCZOS)
             ox, oy = cell - chip - 6, cell - chip - 6
             tile.alpha_composite(sm, (ox, oy))
-            tile.alpha_composite(icon("func_shutdown.png").resize((chip, chip), Image.LANCZOS), (ox, oy))
+            tile.alpha_composite(variant_icon(v, "func_shutdown.png").resize((chip, chip), Image.LANCZOS), (ox, oy))
         sheet.alpha_composite(tile, (cx, cy))
 
     dest = REPO / "preview.png"
@@ -294,7 +306,7 @@ def make_menu_preview(variants: list[str]) -> None:
             x = x0 + i * (big + gap_big)
             if i == sel_os:
                 strip.alpha_composite(sel_b, (x, y_os))
-            strip.alpha_composite(icon(f"{n}.png").resize((big, big), Image.LANCZOS), (x, y_os))
+            strip.alpha_composite(variant_icon(v, f"{n}.png").resize((big, big), Image.LANCZOS), (x, y_os))
 
         tx0 = (W - (len(tool_names) * small + (len(tool_names) - 1) * gap_small)) // 2
         y_tool = y_os + big + 60
@@ -302,7 +314,7 @@ def make_menu_preview(variants: list[str]) -> None:
             x = tx0 + i * (small + gap_small)
             if i == sel_tool:
                 strip.alpha_composite(sel_s, (x, y_tool))
-            strip.alpha_composite(icon(f"{n}.png").resize((small, small), Image.LANCZOS), (x, y_tool))
+            strip.alpha_composite(variant_icon(v, f"{n}.png").resize((small, small), Image.LANCZOS), (x, y_tool))
 
         panel.paste(strip.convert("RGB"), (0, row * strip_h))
 

@@ -1,17 +1,19 @@
 # Prism Minimal
 
 A dark, ultra-minimal [rEFInd](https://www.rodsbooks.com/refind/) boot theme —
-pure-black background, white silhouette OS icons, no panels, no labels. The
-**selected** entry gets a coloured cell: a translucent fill plus a thin
-outline — a **square** on the OS row, a **circle** on the tool row. rEFInd
-draws that only behind the focused entry, so the selected OS/tool reads as
-"that colour" while every other icon stays plain white; no icon PNG is
-touched. No glow, no sheen — just fill + outline.
+pure-black background, silhouette icons, no panels, no labels. Pick a colour
+and the **whole thing** turns that colour: every icon *and* the selection
+outline. The selected entry is marked by a thin outline around it — a
+**square** on the OS row, a **circle** on the tool row. No fill, no glow, no
+sheen; the box interior stays empty.
+
+(rEFInd draws the same icon PNG whether an entry is focused or not, so it can't
+tint just the selected one — the whole set is recoloured instead.)
 
 It ships in **10 colours** — hence *Prism*. Six flat ones and a plain white
-default; three "premium" ones that are **iridescent** — the fill and outline
-cycle hue like holographic foil (rEFInd has no shader to do that live, so it's
-pre-rendered into the PNG).
+default; three "premium" ones that are **iridescent** — the icons and the
+outline cycle hue like holographic foil (rEFInd has no shader to do that live,
+so it's pre-rendered into the PNG).
 
 ![all ten selection styles](preview.png)
 
@@ -23,9 +25,9 @@ pre-rendered into the PNG).
 
 ![white / blue / obsidian-purple in a mock menu](preview-menu.png)
 
-The colour lives entirely in `selection_big.png` / `selection_small.png`. The
-icon set, the black background, `theme.conf` and the layout are identical
-across every colour — switching colour only swaps those two PNGs.
+Switching colour swaps the two selection PNGs and the `icons/` set. The black
+background, `theme.conf` and the layout are identical across every colour.
+`white` keeps the original light icons.
 
 ## Install
 
@@ -43,8 +45,8 @@ root-only). It:
    `/efi` and every mounted FAT volume for a `refind_*.efi` next to a
    `refind.conf`;
 2. copies the theme to `<refind-dir>/themes/prism-minimal/` (the path
-   `theme.conf` expects), with the colour you picked staged as
-   `selection_big.png` / `selection_small.png`;
+   `theme.conf` expects), with the colour you picked — its two selection PNGs
+   and its recoloured `icons/` set;
 3. adds one managed line to `refind.conf`:
    `include themes/prism-minimal/theme.conf` — backing the file up first.
 
@@ -70,8 +72,8 @@ the files are already current it skips the copy entirely. Reboot to see it.
 sudo ./install.sh --color champagne-gold
 ```
 
-Swaps the two selection PNGs in place; `refind.conf` and the icons are left
-untouched.
+Swaps the two selection PNGs and the `icons/` set in place; `refind.conf` is
+left untouched.
 
 ### If rEFInd isn't installed yet
 
@@ -82,9 +84,10 @@ script call `refind-install` for you once.
 ## Manual install
 
 1. Copy this directory to `<your ESP>/EFI/refind/themes/prism-minimal/`.
-2. Pick a colour: copy `colors/<name>/selection_big.png` and
-   `selection_small.png` over the two files of the same name at the top of the
-   theme dir. (`white` is already in place.)
+2. Pick a colour: from `colors/<name>/`, copy `selection_big.png`,
+   `selection_small.png` and the `icons/` folder over the ones at the top of
+   the theme dir. (`white` is the default already in place; it has no
+   `colors/white/icons/` and just uses the top-level `icons/`.)
 3. Add to `refind.conf`:
 
    ```
@@ -101,23 +104,24 @@ theme.conf            rEFInd directives (rEFInd-minimal's, only the theme-dir na
 background.png         the black backdrop (banner_scale fillscreen)
 selection_big.png      active OS-row outline   — a copy of colors/white/…
 selection_small.png    active tool-row outline — a copy of colors/white/…
-icons/                 the OS / tool icon set (one set, shared by every colour)
-colors/<name>/         selection_big.png + selection_small.png per colour
+icons/                 the default (white) OS / tool icon set
+colors/<name>/         per colour: selection_big/small.png + a recoloured icons/
+                       ("white" has only the two PNGs — it reuses icons/)
 install.sh             the installer (also --uninstall)
 tools/generate.py      regenerates every colors/ asset from code
 ```
 
-## Regenerating the outline assets
+## Regenerating the colour assets
 
 ```
-python3 tools/generate.py              # rebuild all colours
+python3 tools/generate.py              # rebuild all colours (outlines + icon sets)
 python3 tools/generate.py blue green   # just some
 python3 tools/generate.py --preview    # also rebuild preview*.png
 ```
 
 Needs `Pillow` and `numpy` (dev-only). Colours, geometry and the iridescence
-parameters all live at the top of that file. After regenerating, re-sync the
-default:
+parameters all live at the top of that file; each colour's `icons/` is the
+top-level `icons/` recoloured. After regenerating, re-sync the default:
 
 ```
 cp colors/white/selection_big.png selection_big.png

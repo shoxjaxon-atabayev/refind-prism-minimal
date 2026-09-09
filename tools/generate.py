@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 REPO = Path(__file__).resolve().parent.parent
 COLORS_DIR = REPO / "colors"
@@ -88,10 +88,16 @@ WHITE_ON_LIGHT = "#2B2B2D"   # the "white" variant's ink on the light background
 
 # --------------------------------------------------------------- geometry --
 
-# Every icon is re-padded so its content fills this fraction of its (square)
-# canvas — evens out the ~0.5-0.62 the source icons vary between. Combined with
-# a large big_icon_size in theme.conf this gives big icons AND wide, even gaps.
+# Every icon is re-padded so its content fills this fraction of its canvas —
+# evens out the ~0.5-0.62 the source icons vary between and, with a large
+# big_icon_size in theme.conf, gives big icons AND wide, even gaps.
 ICON_CONTENT = 0.58
+
+# Output icons at these sizes. theme.conf asks for big_icon_size 200 /
+# small_icon_size 50; the source OS icons are only 128 px, so shipping them at
+# 128 would make rEFInd *upscale* them at boot with its poor scaler — blurry.
+# Shipping at 256 / 128 means rEFInd only ever *downscales* → crisp edges.
+OUT_BIG, OUT_SMALL = 256, 128
 
 # The outline canvas is 256 / 64; rEFInd scales it to big_icon_size /
 # small_icon_size (200 / 50 in theme.conf) — ~0.78x — so `border` is a bit
@@ -201,21 +207,28 @@ def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
 
 # ------------------------------------------------------------------ icons --
 
-def pad_icon(img: Image.Image) -> Image.Image:
-    """Re-centre an icon so its content fills ICON_CONTENT of the square canvas."""
+def pad_icon(img: Image.Image, out: int) -> Image.Image:
+    """Re-centre an icon's content to ICON_CONTENT of an `out`-px canvas, then
+    crisp the edges: a light unsharp mask undoes interpolation softness and a
+    steep contrast curve on the alpha pulls the anti-aliased border back to a
+    tight ~1 px — so it still reads clean after rEFInd's own downscale."""
     im = img.convert("RGBA")
     a = np.asarray(im)
     ys, xs = np.where(a[..., 3] > 8)
     if len(xs) == 0:
-        return im
+        return im.resize((out, out), Image.LANCZOS)
     content = im.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
-    w = im.size[0]
-    s = (w * ICON_CONTENT) / max(content.size)
+    s = (out * ICON_CONTENT) / max(content.size)
     nw, nh = max(1, round(content.size[0] * s)), max(1, round(content.size[1] * s))
     content = content.resize((nw, nh), Image.LANCZOS)
-    canvas = Image.new("RGBA", (w, w), (0, 0, 0, 0))
-    canvas.alpha_composite(content, ((w - nw) // 2, (w - nh) // 2))
-    return canvas
+    canvas = Image.new("RGBA", (out, out), (0, 0, 0, 0))
+    canvas.alpha_composite(content, ((out - nw) // 2, (out - nh) // 2))
+
+    canvas = canvas.filter(ImageFilter.UnsharpMask(radius=1.4, percent=90, threshold=0))
+    arr = np.asarray(canvas, dtype=float) / 255.0
+    edge = arr[..., 3]
+    arr[..., 3] = np.clip((edge - 0.5) * 1.5 + 0.5, 0.0, 1.0)
+    return Image.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGBA")
 
 
 def recolor_icon(padded: Image.Image, variant: str, bg: str) -> Image.Image:
@@ -254,15 +267,21 @@ def build_backgrounds() -> None:
         Image.new("RGB", (64, 64), rgb).save(BG_DIR / f"{name}.png", optimize=True)
 
 
+def is_big_icon(name: str) -> bool:
+    return name.startswith(("os_", "boot_"))
+
+
 def build(variant: str) -> None:
     sources = sorted(ICONS_DIR.glob("*.png"))
+    padded = {f.name: pad_icon(Image.open(f), OUT_BIG if is_big_icon(f.name) else OUT_SMALL)
+              for f in sources}
     for bg in ("dark", "light"):
         d = look_dir(variant, bg)
         (d / "icons").mkdir(parents=True, exist_ok=True)
         render_outline("big", variant, bg).save(d / "selection_big.png", optimize=True)
         render_outline("small", variant, bg).save(d / "selection_small.png", optimize=True)
-        for f in sources:
-            recolor_icon(pad_icon(Image.open(f)), variant, bg).save(d / "icons" / f.name, optimize=True)
+        for name, pic in padded.items():
+            recolor_icon(pic, variant, bg).save(d / "icons" / name, optimize=True)
     print(f"  {variant:16s} -> colors/{variant}/  (+ light/)  {len(sources)} icons x2")
 
 
@@ -322,11 +341,16 @@ def make_menu_preview(variants: list[str]) -> None:
     combos = [(v, bg) for bg in ("dark", "light") for v in variants]
     panel = Image.new("RGB", (W, strip_h * len(combos)), (17, 17, 19))
 
+    def as_refind(img: Image.Image, refind_px: int, draw_px: int) -> Image.Image:
+        # rEFInd downscales the shipped icon to *_icon_size with a plain filter;
+        # mimic that so the preview shows the real on-screen sharpness.
+        return img.resize((refind_px, refind_px), Image.BILINEAR).resize((draw_px, draw_px), Image.LANCZOS)
+
     for row, (v, bg) in enumerate(combos):
         rgb = tuple(int(round(c * 255)) for c in hex_rgb(BACKGROUNDS[bg]))
         strip = Image.new("RGBA", (W, strip_h), rgb + (255,))
-        sel_b = Image.open(look_dir(v, bg) / "selection_big.png").convert("RGBA").resize((big, big), Image.LANCZOS)
-        sel_s = Image.open(look_dir(v, bg) / "selection_small.png").convert("RGBA").resize((small, small), Image.LANCZOS)
+        sel_b = as_refind(Image.open(look_dir(v, bg) / "selection_big.png").convert("RGBA"), 200, big)
+        sel_s = as_refind(Image.open(look_dir(v, bg) / "selection_small.png").convert("RGBA"), 50, small)
 
         x0 = (W - (len(os_names) * big + (len(os_names) - 1) * gap_big)) // 2
         y_os = 64
@@ -334,7 +358,7 @@ def make_menu_preview(variants: list[str]) -> None:
             x = x0 + i * (big + gap_big)
             if i == sel_os:
                 strip.alpha_composite(sel_b, (x, y_os))
-            strip.alpha_composite(look_icon(v, bg, f"{n}.png").resize((big, big), Image.LANCZOS), (x, y_os))
+            strip.alpha_composite(as_refind(look_icon(v, bg, f"{n}.png"), 200, big), (x, y_os))
 
         tx0 = (W - (len(tool_names) * small + (len(tool_names) - 1) * gap_small)) // 2
         y_tool = y_os + big + 56
@@ -342,7 +366,7 @@ def make_menu_preview(variants: list[str]) -> None:
             x = tx0 + i * (small + gap_small)
             if i == sel_tool:
                 strip.alpha_composite(sel_s, (x, y_tool))
-            strip.alpha_composite(look_icon(v, bg, f"{n}.png").resize((small, small), Image.LANCZOS), (x, y_tool))
+            strip.alpha_composite(as_refind(look_icon(v, bg, f"{n}.png"), 50, small), (x, y_tool))
 
         panel.paste(strip.convert("RGB"), (0, row * strip_h))
 

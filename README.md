@@ -1,128 +1,115 @@
 # Prism Minimal
 
-An ultra-minimal [rEFInd](https://www.rodsbooks.com/refind/) boot theme — one
-solid background, silhouette icons, no panels, no labels. Pick a **colour** and
-the **whole thing** turns that colour: every icon *and* the selection outline.
-The selected entry is marked by a thin outline around it — a **square** on the
-OS row, a **circle** on the tool row. No fill, no glow, no sheen.
+A minimal [rEFInd](https://www.rodsbooks.com/refind/) boot theme. One solid
+background, silhouette icons, no labels. Pick a colour and everything — icons
+and the selection outline — turns that colour. The entry you're about to boot
+gets a thin outline: a square on the top row, a circle on the tools row.
 
-(rEFInd draws the same icon PNG whether an entry is focused or not, so it can't
-tint just the selected one — the whole set is recoloured instead.)
+![every colour, dark and light](preview.png)
 
-Two axes:
-
-* **colour** — `white` (default) + `green red violet pink gray blue` +
-  premium iridescent `obsidian-purple` / `titanium-silver` / `champagne-gold`
-  (the icons and outline cycle hue like holographic foil, pre-rendered since
-  rEFInd has no shader)
-* **background** — `dark` (black, default) or `light` (near-white; the icons
-  and outline go dark for contrast)
-
-![every colour on both backgrounds](preview.png)
-
-![white / blue / obsidian-purple in a mock menu, dark then light](preview-menu.png)
-
-`theme.conf` and the layout are identical for every combination — switching
-only swaps `background.png`, the two `selection_*.png` and the `icons/` set.
+![a mock boot menu](preview-menu.png)
 
 ## Install
 
 ```
 git clone https://github.com/shoxjaxon-atabayev/refind-prism-minimal.git
 cd refind-prism-minimal
-./install.sh                                    # white on a dark background
+./install.sh
+```
+
+That's it. This installs the **white** theme on a **black** background. It asks
+for your password (writing the EFI partition needs root), then **reboot** to
+see it.
+
+## Change the colour
+
+```
+./install.sh --color blue
 ./install.sh --color obsidian-purple
-./install.sh --color blue --background light
 ```
 
-`install.sh` re-execs itself with `sudo` when it needs to (the ESP is usually
-root-only). It:
+Colours: `white` `green` `red` `violet` `pink` `gray` `blue`
+`obsidian-purple` `titanium-silver` `champagne-gold`
+&nbsp;&nbsp;*(the last three shimmer)*
 
-1. finds your rEFInd install — checks `/boot`, `/boot/efi`, `/boot/EFI`,
-   `/efi` and every mounted FAT volume for a `refind_*.efi` next to a
-   `refind.conf`;
-2. copies the theme to `<refind-dir>/themes/prism-minimal/` (the path
-   `theme.conf` expects) — the `background.png`, `selection_*.png` and
-   `icons/` for the colour + background you picked;
-3. adds one managed line to `refind.conf`:
-   `include themes/prism-minimal/theme.conf` — backing the file up first.
+## Change the background
 
-It never touches EFI boot entries, NVRAM, Secure Boot, or any other
-bootloader. It's safe to re-run: it won't duplicate the include line, and if
-the files are already current it skips the copy entirely. Reboot to see it.
+```
+./install.sh --background light
+./install.sh --background dark
+```
 
-### Flags
+`dark` is black (default), `light` is near-white (icons and outline turn dark
+so they stay readable).
 
-| flag | effect |
+## Combine them
+
+```
+./install.sh --color champagne-gold --background light
+```
+
+Re-run with different options any time to switch — it only swaps the images,
+nothing else. Run `./install.sh --list` to see every option.
+
+## Remove it
+
+```
+./install.sh --uninstall
+```
+
+Puts `refind.conf` back the way it was.
+
+## All commands
+
+| command | what it does |
 |---|---|
-| `--color <name>` | colour to install / switch to (default `white`) |
-| `--background <dark\|light>` | background to use (default `dark`); `--bg` for short |
-| `--list` | print the available colours and backgrounds, exit |
-| `--dry-run` | show the plan, change nothing (no `sudo`) |
-| `--yes` | skip the confirmation prompt |
-| `--refind-dir <path>` | skip detection; use this dir (the one with `refind.conf`) |
-| `--deploy-refind` | run the system's `refind-install` first if rEFInd isn't on the ESP yet |
-| `--uninstall` | remove the theme and the managed `refind.conf` block |
+| `./install.sh` | install `white` on a `dark` background |
+| `./install.sh --color <name>` | pick a colour |
+| `./install.sh --background <dark\|light>` | pick a background (short: `--bg`) |
+| `./install.sh --list` | list the colours and backgrounds |
+| `./install.sh --uninstall` | remove the theme, restore `refind.conf` |
+| `./install.sh --dry-run` | show what would happen, change nothing |
+| `./install.sh --yes` | don't ask for confirmation |
+| `./install.sh --refind-dir <path>` | if it can't find rEFInd, point it at the folder with `refind.conf` |
+| `./install.sh --deploy-refind` | if rEFInd itself isn't installed, set it up first |
 
-### Restyle later
+## Notes
 
-```
-sudo ./install.sh --color champagne-gold --background light
-```
+* **rEFInd must already be installed.** If it isn't, `./install.sh` stops and
+  tells you what to run (`sudo refind-install`), or pass `--deploy-refind` and
+  it does that step for you.
+* **Safe to re-run.** It only ever touches `themes/prism-minimal/` on your EFI
+  partition and one marked block in `refind.conf` (backed up first). It never
+  touches boot entries, Secure Boot, or other bootloaders.
+* If a theme file ever goes missing, rEFInd just falls back to its built-in
+  look — you never get a broken boot menu.
 
-Swaps `background.png`, the two `selection_*.png` and the `icons/` set in
-place; `refind.conf` is left untouched.
+## Manual install (no script)
 
-### If rEFInd isn't installed yet
-
-`install.sh` stops with instructions — set up rEFInd itself first
-(`sudo refind-install`), then re-run. Or pass `--deploy-refind` to let the
-script call `refind-install` for you once.
-
-## Manual install
-
-1. Copy this directory to `<your ESP>/EFI/refind/themes/prism-minimal/`.
-2. Pick a look. For `<colour>` on the **dark** background copy the three from
-   `colors/<colour>/` — `selection_big.png`, `selection_small.png`, `icons/` —
-   over the ones at the top of the theme dir; for the **light** background use
-   `colors/<colour>/light/` instead. Then copy `backgrounds/<dark|light>.png`
-   to `background.png`. (`white` + `dark` is already in place.)
-3. Add to `refind.conf`:
+1. Copy this folder to `<your EFI partition>/EFI/refind/themes/prism-minimal/`.
+2. Choose a look and copy its files over the ones at the top of that folder:
+   * `backgrounds/dark.png` **or** `backgrounds/light.png` → `background.png`
+   * from `colors/<colour>/` (dark bg) or `colors/<colour>/light/` (light bg):
+     `selection_big.png`, `selection_small.png`, and the whole `icons/` folder
+3. Add one line to `refind.conf`:
 
    ```
    include themes/prism-minimal/theme.conf
    ```
 
-If any themed asset is missing, rEFInd falls back to its built-in rendering —
-you always get a usable menu.
+## Developing
 
-## Layout
-
-```
-theme.conf            rEFInd directives (rEFInd-minimal's, only the theme-dir name differs)
-background.png         active backdrop         — a copy of backgrounds/dark.png
-selection_big.png      active OS-row outline   — a copy of colors/white/…
-selection_small.png    active tool-row outline — a copy of colors/white/…
-backgrounds/           dark.png (black) · light.png (near-white)
-colors/<name>/         selection_big/small.png + icons/  (dark background)
-colors/<name>/light/   the same, darkened for the light background
-icons/                 the raw source icon set (input to generate.py only)
-install.sh             the installer (also --uninstall)
-tools/generate.py      regenerates backgrounds/ and colors/ from code
-```
-
-## Regenerating the assets
+`tools/generate.py` builds `backgrounds/` and every `colors/<name>/` (and
+`colors/<name>/light/`) from `icons/` plus the constants at the top of the
+file — colours, backgrounds, icon padding, iridescence.
 
 ```
-python3 tools/generate.py              # rebuild every colour x background
-python3 tools/generate.py blue green   # just some colours
-python3 tools/generate.py --preview    # also rebuild preview*.png
+python3 tools/generate.py            # rebuild everything (needs Pillow + numpy)
+python3 tools/generate.py blue red   # just some colours
+python3 tools/generate.py --preview  # also rebuild preview*.png
 ```
 
-Needs `Pillow` and `numpy` (dev-only). Colours, backgrounds, icon padding and
-the iridescence parameters all live at the top of that file. Each colour's
-`icons/` is the top-level `icons/` re-padded and recoloured. After
-regenerating, re-sync the repo's default copies:
+Then re-sync the repo's default copies:
 
 ```
 cp backgrounds/dark.png background.png
@@ -132,6 +119,6 @@ cp colors/white/selection_small.png selection_small.png
 
 ## Credits
 
-Icon set and base layout from
+Icons and base layout from
 [rEFInd-minimal](https://github.com/EvanPurkhiser/rEFInd-minimal) by Evan
-Purkhiser. Colour + iridescent selection system and installer added here.
+Purkhiser. The colour / background system and the installer are new here.

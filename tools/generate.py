@@ -33,6 +33,7 @@ Dependencies: Pillow, numpy   (dev-only — never shipped to the ESP).
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -41,6 +42,7 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 COLORS_DIR = REPO / "colors"
+ICONS_DIR = REPO / "icons"
 
 # ---------------------------------------------------------------- palette --
 
@@ -189,6 +191,48 @@ def render(kind: str, variant: str) -> Image.Image:
     return Image.fromarray((rgba * 255.0 + 0.5).astype(np.uint8), "RGBA")
 
 
+# ------------------------------------------------------------- icon tint --
+
+def recolor_icon(src: Image.Image, variant: str) -> Image.Image:
+    """Replace an icon's colour with the variant's, keeping its shape/alpha.
+    Simple variants get a flat fill; premium variants get the same iridescent
+    hue-cycling gradient as their outline (a diagonal sweep across the icon)."""
+    a = np.asarray(src.convert("RGBA"), dtype=float) / 255.0
+    alpha = a[..., 3]
+    h, w = alpha.shape
+    if variant in PREMIUM:
+        lut = gradient_lut(PREMIUM[variant])
+        ys, xs = np.mgrid[0:h, 0:w].astype(float)
+        t = np.mod(((xs / max(w - 1, 1)) * 0.62 + (ys / max(h - 1, 1)) * 0.38)
+                   * 1.25 + PREMIUM_PHASE[variant], 1.0)
+        rgb = lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)]
+    else:
+        rgb = np.broadcast_to(hex_rgb(SIMPLE[variant]), (h, w, 3))
+    out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
+    return Image.fromarray((out * 255.0 + 0.5).astype(np.uint8), "RGBA")
+
+
+def build_icons(variant: str) -> int:
+    """Write colors/<variant>/icons/. 'white' is skipped — it uses the repo's
+    icons/ unchanged (the installer falls back to it)."""
+    if variant == "white":
+        return 0
+    dst = COLORS_DIR / variant / "icons"
+    dst.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for f in sorted(ICONS_DIR.glob("*.png")):
+        recolor_icon(Image.open(f), variant).save(dst / f.name, optimize=True)
+        n += 1
+    return n
+
+
+def variant_icon(variant: str, name: str) -> Image.Image:
+    p = COLORS_DIR / variant / "icons" / name
+    if not p.exists():
+        p = ICONS_DIR / name
+    return Image.open(p).convert("RGBA")
+
+
 # ----------------------------------------------------------------- driver --
 
 def build(variant: str) -> None:
@@ -196,23 +240,19 @@ def build(variant: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
     render("big", variant).save(out / "selection_big.png", optimize=True)
     render("small", variant).save(out / "selection_small.png", optimize=True)
-    print(f"  {variant:16s} -> {out.relative_to(REPO)}/")
+    n = build_icons(variant)
+    tail = f" + {n} icons" if n else "  (icons: repo default)"
+    print(f"  {variant:16s} -> {out.relative_to(REPO)}/{tail}")
 
 
 def make_preview(variants: list[str]) -> None:
-    """Contact sheet: per variant, the square selection_big behind the white
-    arch icon (OS row) and, inset bottom-right, the circular selection_small
-    behind a tool icon — icons drawn on top, rEFInd's own order."""
-    os_p = REPO / "icons" / "os_arch.png"
-    tool_p = REPO / "icons" / "func_shutdown.png"
-    if not os_p.exists():
+    """Contact sheet: per variant, its (recoloured) arch icon inside the square
+    selection_big, and inset bottom-right its tool icon inside the circular
+    selection_small — icons drawn on top, rEFInd's own order."""
+    if not (ICONS_DIR / "os_arch.png").exists():
         print("  (skipping preview: icons/os_arch.png not found)")
         return
-    os_icon = Image.open(os_p).convert("RGBA").resize((256, 256), Image.LANCZOS)
     chip = 92
-    tool_icon = (Image.open(tool_p).convert("RGBA").resize((chip, chip), Image.LANCZOS)
-                 if tool_p.exists() else None)
-
     cell, pad, cols = 256, 24, 5
     rows = (len(variants) + cols - 1) // cols
     W = cols * cell + (cols + 1) * pad
@@ -224,12 +264,12 @@ def make_preview(variants: list[str]) -> None:
         cy = pad + (i // cols) * (cell + pad)
         tile = Image.new("RGBA", (cell, cell), (11, 11, 13, 255))
         tile.alpha_composite(Image.open(COLORS_DIR / v / "selection_big.png").convert("RGBA"))
-        tile.alpha_composite(os_icon)
-        if tool_icon is not None:
+        tile.alpha_composite(variant_icon(v, "os_arch.png").resize((256, 256), Image.LANCZOS))
+        if (ICONS_DIR / "func_shutdown.png").exists():
             sm = Image.open(COLORS_DIR / v / "selection_small.png").convert("RGBA").resize((chip, chip), Image.LANCZOS)
             ox, oy = cell - chip - 6, cell - chip - 6
             tile.alpha_composite(sm, (ox, oy))
-            tile.alpha_composite(tool_icon, (ox, oy))
+            tile.alpha_composite(variant_icon(v, "func_shutdown.png").resize((chip, chip), Image.LANCZOS), (ox, oy))
         sheet.alpha_composite(tile, (cx, cy))
 
     dest = REPO / "preview.png"
@@ -242,11 +282,11 @@ def make_menu_preview(variants: list[str]) -> None:
     black fill, a centred row of big OS icons (2nd selected), a row of small
     tool icons below (1st selected) — icons drawn *on top* of the selection
     asset, exactly rEFInd's own draw order. Labels are off (hideui)."""
-    os_names = ["os_omarchy", "os_arch", "os_linux", "os_win11", "os_mac"]
-    tool_names = ["func_shutdown", "func_firmware", "func_about"]
-    os_icons = [p for n in os_names if (p := REPO / "icons" / f"{n}.png").exists()]
-    tool_icons = [p for n in tool_names if (p := REPO / "icons" / f"{n}.png").exists()]
-    if len(os_icons) < 3:
+    os_names = [n for n in ("os_omarchy", "os_arch", "os_linux", "os_win11", "os_mac")
+                if (ICONS_DIR / f"{n}.png").exists()]
+    tool_names = [n for n in ("func_shutdown", "func_firmware", "func_about")
+                  if (ICONS_DIR / f"{n}.png").exists()]
+    if len(os_names) < 3:
         print("  (skipping menu preview: not enough icons)")
         return
 
@@ -263,21 +303,21 @@ def make_menu_preview(variants: list[str]) -> None:
         sel_b = Image.open(COLORS_DIR / v / "selection_big.png").convert("RGBA").resize((big, big), Image.LANCZOS)
         sel_s = Image.open(COLORS_DIR / v / "selection_small.png").convert("RGBA").resize((small, small), Image.LANCZOS)
 
-        x0 = (W - (len(os_icons) * big + (len(os_icons) - 1) * gap_big)) // 2
+        x0 = (W - (len(os_names) * big + (len(os_names) - 1) * gap_big)) // 2
         y_os = 70
-        for i, ip in enumerate(os_icons):
+        for i, n in enumerate(os_names):
             x = x0 + i * (big + gap_big)
             if i == sel_os:
                 strip.alpha_composite(sel_b, (x, y_os))
-            strip.alpha_composite(Image.open(ip).convert("RGBA").resize((big, big), Image.LANCZOS), (x, y_os))
+            strip.alpha_composite(variant_icon(v, f"{n}.png").resize((big, big), Image.LANCZOS), (x, y_os))
 
-        tx0 = (W - (len(tool_icons) * small + (len(tool_icons) - 1) * gap_small)) // 2
+        tx0 = (W - (len(tool_names) * small + (len(tool_names) - 1) * gap_small)) // 2
         y_tool = y_os + big + 60
-        for i, ip in enumerate(tool_icons):
+        for i, n in enumerate(tool_names):
             x = tx0 + i * (small + gap_small)
             if i == sel_tool:
                 strip.alpha_composite(sel_s, (x, y_tool))
-            strip.alpha_composite(Image.open(ip).convert("RGBA").resize((small, small), Image.LANCZOS), (x, y_tool))
+            strip.alpha_composite(variant_icon(v, f"{n}.png").resize((small, small), Image.LANCZOS), (x, y_tool))
 
         panel.paste(strip.convert("RGB"), (0, row * strip_h))
 

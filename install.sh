@@ -268,6 +268,17 @@ strip_block() {
 
 # ------------------------------------------------------------- validate --
 
+# The icon set for the chosen colour: colors/<colour>/icons/ (recoloured to
+# match the outline) if present, else the repo's plain icons/ (that's what
+# "white" uses).
+icons_src() {
+  if [ -d "$SCRIPT_DIR/colors/$COLOR/icons" ]; then
+    printf '%s\n' "$SCRIPT_DIR/colors/$COLOR/icons"
+  else
+    printf '%s\n' "$SCRIPT_DIR/icons"
+  fi
+}
+
 validate_source() {
   step "checking theme source"
   local missing=0 f
@@ -285,7 +296,10 @@ validate_source() {
     available_colors | sed 's/^/    /' >&2
     die "pick one with --color, or run --list-colors."
   fi
-  ok "source OK — colour: $COLOR"
+  local isrc; isrc="$(icons_src)"
+  ls "$isrc"/*.png >/dev/null 2>&1 \
+    || die "$isrc has no PNGs — regenerate with tools/generate.py."
+  ok "source OK — colour: $COLOR  (icons: ${isrc#"$SCRIPT_DIR"/})"
 }
 
 # After copying, make sure every path theme.conf points at actually resolves
@@ -309,16 +323,19 @@ validate_installed() {
 # write (same files, same chosen colour) — lets a re-run skip the ESP copy
 # entirely instead of churning ~70 FAT files and rotating a backup every time.
 theme_files_current() {
-  local target="$1" f rel
+  local target="$1" f rel src
   [ -d "$target" ] || return 1
   cmp -s "$SCRIPT_DIR/theme.conf"      "$target/theme.conf"      || return 1
   cmp -s "$SCRIPT_DIR/background.png"  "$target/background.png"  || return 1
   cmp -s "$SCRIPT_DIR/colors/$COLOR/selection_big.png"   "$target/selection_big.png"   || return 1
   cmp -s "$SCRIPT_DIR/colors/$COLOR/selection_small.png" "$target/selection_small.png" || return 1
+  src="$(icons_src)"
+  [ "$(find "$src" -maxdepth 1 -type f | wc -l)" \
+      -eq "$(find "$target/icons" -maxdepth 1 -type f 2>/dev/null | wc -l)" ] || return 1
   while IFS= read -r f; do
-    rel="${f#"$SCRIPT_DIR"/}"
-    cmp -s "$f" "$target/$rel" || return 1
-  done < <(find "$SCRIPT_DIR/icons" "$SCRIPT_DIR/colors" -type f)
+    rel="${f#"$src"/}"
+    cmp -s "$f" "$target/icons/$rel" || return 1
+  done < <(find "$src" -type f)
   return 0
 }
 
@@ -377,8 +394,7 @@ do_install() {
     # chown/chmod a file there is at best a no-op and at worst an error.
     cp "$SCRIPT_DIR/theme.conf"     "$target/theme.conf"
     cp "$SCRIPT_DIR/background.png" "$target/background.png"
-    cp -r "$SCRIPT_DIR/icons"  "$target/icons"
-    cp -r "$SCRIPT_DIR/colors" "$target/colors"
+    cp -r "$(icons_src)" "$target/icons"   # the recoloured set for this colour
     cp "$SCRIPT_DIR/colors/$COLOR/selection_big.png"   "$target/selection_big.png"
     cp "$SCRIPT_DIR/colors/$COLOR/selection_small.png" "$target/selection_small.png"
     ok "copied theme to $target"

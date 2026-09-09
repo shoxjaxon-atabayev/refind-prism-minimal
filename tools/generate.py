@@ -87,9 +87,12 @@ ALL_VARIANTS = list(SIMPLE) + list(PREMIUM)
 # rEFInd scales the asset down to icon size (192 / 48 here), which thins it.
 #   big   -> rounded square outline for the OS row
 #   small -> circle outline for the tool row
+# Assets are 256 / 64; rEFInd scales them to big_icon_size / small_icon_size
+# (128 / 32 in theme.conf), i.e. ~0.5x — so `border` here is ~2x the stroke
+# width you actually see on screen.
 SPECS = {
-    "big":   dict(px=256, shape="square", margin=8.0, radius=6.0, border=5.5),
-    "small": dict(px=64,  shape="circle", margin=2.0, radius=0.0, border=2.6),
+    "big":   dict(px=256, shape="square", margin=8.0, radius=6.0, border=6.5),
+    "small": dict(px=64,  shape="circle", margin=1.5, radius=0.0, border=3.0),
 }
 SS = 4  # supersample factor
 
@@ -247,10 +250,10 @@ def make_menu_preview(variants: list[str]) -> None:
         print("  (skipping menu preview: not enough icons)")
         return
 
-    # icon sizes here track theme.conf's 192 / 48 at ~0.44 px-per-rEFInd-px
-    W, strip_h = 1280, 300
-    big, small = 84, 40
-    gap_big, gap_small = 96, 72
+    # icon sizes here track theme.conf's 128 / 32 at ~0.6 px-per-rEFInd-px
+    W, strip_h = 1280, 230
+    big, small = 78, 20
+    gap_big, gap_small = 104, 92
     sel_os, sel_tool = 1, 0
 
     panel = Image.new("RGB", (W, strip_h * len(variants)), (0, 0, 0))

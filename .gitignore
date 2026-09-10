@@ -1,4 +1,15 @@
+# Python
 __pycache__/
 *.pyc
+
+# Generator scratch / backups
 *.backup-*
 *.previous/
+
+# One-off upscaling benchmark
+.upscale-benchmark/
+
+# OS / editor
+.DS_Store
+*.swp
+*~

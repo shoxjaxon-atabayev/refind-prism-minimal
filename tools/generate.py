@@ -20,8 +20,8 @@ generous spacing regardless of how tightly each source icon was cropped.
 Output (this script only writes here):
 
     backgrounds/<bg>.png                           solid colour, 64x64
-    colors/<colour>/selection_big.png              256x256   (dark bg)
-    colors/<colour>/selection_small.png             64x64
+    colors/<colour>/selection_big.png              1024x1024 (dark bg)
+    colors/<colour>/selection_small.png            256x256
     colors/<colour>/icons/*.png
     colors/<colour>/light/selection_big.png                  (light bg)
     colors/<colour>/light/selection_small.png
@@ -31,6 +31,8 @@ Usage:
     python3 tools/generate.py                 # regenerate everything
     python3 tools/generate.py green blue      # just these colours
     python3 tools/generate.py --preview       # also write preview*.png
+    python3 tools/generate.py --icons-dir=PATH   # read source icons from PATH
+                                                 # instead of icons/
 
 Dependencies: Pillow, numpy   (dev-only — never shipped to the ESP).
 """
@@ -93,21 +95,32 @@ WHITE_ON_LIGHT = "#2B2B2D"   # the "white" variant's ink on the light background
 # big_icon_size in theme.conf, gives big icons AND wide, even gaps.
 ICON_CONTENT = 0.58
 
-# Output icons at these sizes. theme.conf asks for big_icon_size 200 /
-# small_icon_size 50; the source OS icons are only 128 px, so shipping them at
-# 128 would make rEFInd *upscale* them at boot with its poor scaler — blurry.
-# Shipping at 256 / 128 means rEFInd only ever *downscales* → crisp edges.
-OUT_BIG, OUT_SMALL = 256, 128
+# Master resolution multiplier. The icons in icons/ are 4x hi-res masters
+# (Real-ESRGAN x4plus upscales of the originals), so every generated asset is
+# emitted at 4x the historical size — OS icons 1024, tool icons 512, selection
+# outlines to match. theme.conf still asks for big_icon_size 200 /
+# small_icon_size 50, so rEFInd only ever *downscales* these at boot → crisp.
+SCALE = 4
 
-# The outline canvas is 256 / 64; rEFInd scales it to big_icon_size /
-# small_icon_size (200 / 50 in theme.conf) — ~0.78x — so `border` is a bit
-# more than the thin on-screen stroke. `margin` keeps the outline just
-# outside the re-padded icon.
+# Output icons at these sizes (256 / 128 before SCALE).
+OUT_BIG, OUT_SMALL = 256 * SCALE, 128 * SCALE
+
+# The outline canvas is OUT_BIG / (OUT_SMALL // 2); rEFInd scales it down to
+# big_icon_size / small_icon_size (200 / 50 in theme.conf) — so `border` is a
+# bit more than the thin on-screen stroke. `margin` keeps the outline just
+# outside the re-padded icon. All four measures scale with SCALE.
 SPECS = {
-    "big":   dict(px=256, shape="square", margin=34.0, radius=7.0, border=3.4),
-    "small": dict(px=64,  shape="circle", margin=9.0, radius=0.0, border=2.3),
+    "big":   dict(px=256 * SCALE, shape="square",
+                  margin=34.0 * SCALE, radius=7.0 * SCALE, border=3.4 * SCALE),
+    "small": dict(px=64 * SCALE, shape="circle",
+                  margin=9.0 * SCALE, radius=0.0, border=2.3 * SCALE),
 }
 SS = 4  # supersample factor
+# Cap the outline supersample buffer: at SCALE 4 the square outline is 1024 px
+# and 1024*SS would be a 4096² float grid (OOM-prone on low-RAM boxes). A
+# rounded-rect stroke needs no more than ~2x SSAA at that size; the smaller
+# circle outline stays at the full factor.
+MAX_OUTLINE_RES = 2048
 BORDER_ALPHA = 1.0
 RING_CYCLES_BIG = 2.0       # whole numbers only — seamless across the branch cut
 RING_CYCLES_SMALL = 1.0
@@ -150,6 +163,14 @@ def gradient_lut(stops: list[str], n: int = 1024) -> np.ndarray:
     return lut
 
 
+def clear_transparent_rgb(rgba_u8: np.ndarray) -> np.ndarray:
+    """Zero the RGB of fully-transparent pixels (alpha == 0) in place, so
+    transparent regions carry no colour — smaller PNGs and no matte / fringe
+    risk for any downstream compositor."""
+    rgba_u8[rgba_u8[..., 3] == 0, 0:3] = 0
+    return rgba_u8
+
+
 def downscale(arr: np.ndarray, size: int) -> np.ndarray:
     """LANCZOS downscale of a float array in [0,1]; keeps last axis for RGB."""
     mode = "L" if arr.ndim == 2 else "RGB"
@@ -174,18 +195,19 @@ def paint(variant: str, bg: str):
 def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
     spec = SPECS[kind]
     size = spec["px"]
-    hi = size * SS
+    ss = SS if size * SS <= MAX_OUTLINE_RES else MAX_OUTLINE_RES / size
+    hi = int(round(size * ss))
     ys, xs = np.mgrid[0:hi, 0:hi].astype(float)
     c = (hi - 1) / 2.0
     px, py = xs - c, ys - c
 
-    outer = (size / 2.0 - spec["margin"]) * SS
-    bw = spec["border"] * SS
-    r = spec["radius"] * SS
-    aa = 1.1 * SS
+    outer = (size / 2.0 - spec["margin"]) * ss
+    bw = spec["border"] * ss
+    r = spec["radius"] * ss
+    aa = 1.1 * ss
 
     d_out = shape_sdf(spec["shape"], px, py, outer, r)
-    d_in = shape_sdf(spec["shape"], px, py, outer - bw, max(r - bw, 0.4 * SS))
+    d_in = shape_sdf(spec["shape"], px, py, outer - bw, max(r - bw, 0.4 * ss))
     ring = np.clip(smoothstep(aa, -aa, d_out) - smoothstep(aa, -aa, d_in), 0.0, 1.0)
 
     mode, col = paint(variant, bg)
@@ -202,7 +224,8 @@ def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
 
     alpha = downscale(ring, size) * BORDER_ALPHA
     rgba = np.clip(np.dstack([stroke_rgb, alpha]), 0.0, 1.0)
-    return Image.fromarray((rgba * 255.0 + 0.5).astype(np.uint8), "RGBA")
+    return Image.fromarray(
+        clear_transparent_rgb((rgba * 255.0 + 0.5).astype(np.uint8)), "RGBA")
 
 
 # ------------------------------------------------------------------ icons --
@@ -233,8 +256,9 @@ def pad_icon(img: Image.Image, out: int) -> Image.Image:
 
 def recolor_icon(padded: Image.Image, variant: str, bg: str) -> Image.Image:
     a = np.asarray(padded.convert("RGBA"), dtype=float) / 255.0
-    if variant == "white" and bg == "dark":
-        return Image.fromarray((a * 255.0 + 0.5).astype(np.uint8), "RGBA")  # keep as-is
+    if variant == "white" and bg == "dark":  # keep as-is (bar the transparent-RGB clear)
+        return Image.fromarray(
+            clear_transparent_rgb((a * 255.0 + 0.5).astype(np.uint8)), "RGBA")
     alpha = a[..., 3]
     h, w = alpha.shape
     mode, col = paint(variant, bg)
@@ -247,7 +271,8 @@ def recolor_icon(padded: Image.Image, variant: str, bg: str) -> Image.Image:
     else:
         rgb = np.broadcast_to(col, (h, w, 3))
     out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
-    return Image.fromarray((out * 255.0 + 0.5).astype(np.uint8), "RGBA")
+    return Image.fromarray(
+        clear_transparent_rgb((out * 255.0 + 0.5).astype(np.uint8)), "RGBA")
 
 
 def look_dir(variant: str, bg: str) -> Path:
@@ -379,6 +404,14 @@ def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
     flags = {a for a in argv if a.startswith("--")}
 
+    global ICONS_DIR
+    for a in flags:
+        if a.startswith("--icons-dir="):
+            ICONS_DIR = Path(a.split("=", 1)[1]).expanduser().resolve()
+    if not ICONS_DIR.is_dir():
+        print(f"icons dir not found: {ICONS_DIR}", file=sys.stderr)
+        return 2
+
     variants = args or ALL_VARIANTS
     unknown = [v for v in variants if v not in ALL_VARIANTS]
     if unknown:
@@ -386,6 +419,7 @@ def main(argv: list[str]) -> int:
         print(f"available: {', '.join(ALL_VARIANTS)}", file=sys.stderr)
         return 2
 
+    print(f"source icons: {ICONS_DIR}")
     build_backgrounds()
     print(f"generating {len(variants)} colour(s) x 2 backgrounds")
     for v in variants:

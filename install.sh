@@ -259,9 +259,14 @@ interactive_color_menu() {
   printf '─────────────\n\n'
   printf 'Select theme colours:\n\n'
 
-  local drawn=0
+  # menu_lines is every line draw_menu prints in one pass (colour rows + a
+  # blank separator + the hint line) — the cursor-up amount on a redraw MUST
+  # match this exactly, or each redraw lands a couple of rows short and
+  # leaves stale duplicate rows behind (the hint line used to be printed
+  # once, outside this function, so the up-count never accounted for it).
+  local drawn=0 menu_lines=$((total + 2))
   draw_menu() {
-    [ "$drawn" -eq 1 ] && printf '\033[%dA' "$total"
+    [ "$drawn" -eq 1 ] && printf '\033[%dA' "$menu_lines"
     drawn=1
     local j mark cursor note label
     for ((j = 0; j < total; j++)); do
@@ -271,6 +276,8 @@ interactive_color_menu() {
       note="$(color_note "${names[$j]}")"
       printf '\033[2K%s %s %-18s %s\n' "$cursor" "$mark" "$label" "$note"
     done
+    printf '\033[2K\n\033[2K%s↑/↓%s Navigate   %sSpace%s Select   %sEnter%s Install\n' \
+      "$_b" "$_x" "$_b" "$_x" "$_b" "$_x"
   }
 
   local old_stty
@@ -281,8 +288,6 @@ interactive_color_menu() {
   printf '\033[?25l'
 
   draw_menu
-  printf '\n\033[2K%s↑/↓%s Navigate   %sSpace%s Select   %sEnter%s Install\n' \
-    "$_b" "$_x" "$_b" "$_x" "$_b" "$_x"
 
   while true; do
     key=""

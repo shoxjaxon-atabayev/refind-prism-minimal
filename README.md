@@ -13,6 +13,8 @@ the gradient lives in the selection: border, a soft fill, and a glow.
 
 ## Install
 
+Two steps — pick colours, then install one of them:
+
 ```
 git clone https://github.com/shoxjaxon-atabayev/refind-prism-minimal.git
 cd refind-prism-minimal
@@ -20,12 +22,8 @@ cd refind-prism-minimal
 ```
 
 No pre-built colour library is cloned — there's nothing bulky to fetch.
-Colour variants are generated on your machine, on the spot, by
-`tools/generate.py` (needs **Python 3 + Pillow + numpy**; the installer
-checks for these first and tells you what to install if either is missing).
-
-Run with no `--color` and a terminal attached, and you get an interactive
-picker:
+Running `./install.sh` with no `--color` and a terminal attached opens an
+interactive picker:
 
 ```
 Prism Minimal
@@ -45,19 +43,35 @@ Select theme colours:
 ↑/↓ Navigate   Space Select   Enter Install
 ```
 
-Toggle as many colours as you like with Space; the first one (in the list
-above) becomes the active theme, the rest are generated too but not wired
-in — handy if you want to eyeball a few before committing to one. Press
-Enter with nothing selected and you get `white`, unchanged. It then asks for
-your password (writing the EFI partition needs root), then **reboot** to see
-it.
+Toggle as many colours as you like with Space, Enter to confirm. This
+**generates the ones you picked** (needs **Python 3 + Pillow + numpy** — the
+installer checks for these first) into `build/colors/` inside this checkout
+and stops there — **nothing is installed to rEFInd yet**, and this step
+never asks for your password (it never touches the EFI partition).
+
+Then install the one you actually want:
+
+```
+./install.sh --color platinum
+```
+
+This reuses what the picker already generated — no regenerating. It's what
+asks for your password (writing the EFI partition needs root), and it fully
+replaces whatever colour was installed before (no old copy kept around).
+**Reboot** to see it.
+
+Skip the picker entirely by naming a colour straight away — if it isn't
+already in `build/colors/`, this generates just that one first:
+
+```
+./install.sh --color blue
+```
 
 ## Change the colour
 
 ```
-./install.sh --color blue                # no prompt, skips the menu
+./install.sh --color blue
 ./install.sh --color obsidian-purple
-./install.sh --color blue,aurora         # generate both; blue (first) is active
 ```
 
 Colours: `white` `green` `red` `violet` `pink` `gray` `blue`
@@ -67,8 +81,8 @@ Colours: `white` `green` `red` `violet` `pink` `gray` `blue`
 `aurora`/`solaris`/`forest`/`rose-gold`/`cyberpunk`/`platinum` are premium
 gradients for the dark background)*
 
-An unknown colour name warns and is skipped rather than aborting the
-install — e.g. `--color purple,blue` installs `blue` and prints:
+An unknown colour name warns and falls back rather than aborting the
+install:
 
 ```
 ⚠ Unknown color: purple
@@ -108,8 +122,8 @@ Puts `refind.conf` back the way it was.
 
 | command | what it does |
 |---|---|
-| `./install.sh` | interactive colour picker, `dark` background |
-| `./install.sh --color <name>[,<name>...]` | pick one or more colours without the picker |
+| `./install.sh` | pick colours to generate (no install yet) |
+| `./install.sh --color <name>` | install `<name>` now, skipping the picker |
 | `./install.sh --background <dark\|light>` | pick a background (short: `--bg`) |
 | `./install.sh --list` | list the colours and backgrounds |
 | `./install.sh --uninstall` | remove the theme, restore `refind.conf` |
@@ -128,6 +142,13 @@ Puts `refind.conf` back the way it was.
 * **Safe to re-run.** It only ever touches `themes/prism-minimal/` on your EFI
   partition and one marked block in `refind.conf` (backed up first). It never
   touches boot entries, Secure Boot, or other bootloaders.
+* **Installing always fully replaces the previous colour** — no `.previous`
+  backup is kept, so re-styling repeatedly doesn't slowly fill up your EFI
+  partition.
+* `build/colors/` (inside this checkout) is where generated colours live
+  between the two steps. It's gitignored, never committed, and safe to
+  delete any time — `./install.sh --color <name>` just regenerates whatever
+  it needs.
 * If a theme file ever goes missing, rEFInd just falls back to its built-in
   look — you never get a broken boot menu.
 
@@ -154,10 +175,11 @@ want first, then place it by hand:
 
 `tools/generate.py` builds every `<out>/<name>/` (and `<out>/<name>/light/`)
 from `icons/` plus the constants at the top of the file — colours,
-backgrounds, icon padding, iridescence. With no `--out-dir`, `<out>` is
-`build/` in this checkout (gitignored, never committed) and a plain
-no-args run also rewrites the committed `backgrounds/dark.png` /
-`backgrounds/light.png` (harmless — they're deterministic solid fills).
+backgrounds, icon padding, iridescence. `install.sh` always points `<out>`
+at `build/colors/` in this checkout (its persistent cache); running the
+generator directly with no `--out-dir` uses that same `build/colors/` and
+also rewrites the committed `backgrounds/dark.png` / `backgrounds/light.png`
+(harmless — they're deterministic solid fills).
 
 ```
 python3 tools/generate.py                       # rebuild everything into build/colors/
@@ -168,8 +190,8 @@ python3 tools/generate.py white --out-dir=/tmp/x  # build one colour elsewhere
 ```
 
 Then re-sync the repo's default copies (used by `--help`/docs and as a
-manual-install fallback — not read by `install.sh`, which always generates
-fresh):
+manual-install fallback — not read by `install.sh`, which reads straight
+from `build/colors/`):
 
 ```
 cp backgrounds/dark.png background.png

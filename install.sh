@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Prism Minimal — installer for a minimal rEFInd boot theme with colour variants.
 #
-#   ./install.sh                    interactive colour picker, dark background
-#   ./install.sh --color blue       install (or just restyle) to a colour, no prompt
-#   ./install.sh --color blue,red   generate several; the first (canonical order) is active
+# Two separate steps — generate, then install:
+#
+#   ./install.sh                    pick colours to generate (no install yet)
+#   ./install.sh --color blue       install `blue` now (generates it first if
+#                                   it isn't already sitting in build/colors/)
 #   ./install.sh --background light  put it on a near-white background instead
 #   ./install.sh --list             list the available colours and backgrounds
 #   ./install.sh --dry-run          print the plan, change nothing
@@ -13,13 +15,19 @@
 #                                   rEFInd isn't on the ESP yet
 #   ./install.sh --uninstall        remove the theme, revert refind.conf
 #
-# There is no pre-generated colour library shipped in this repo. Colour
-# variants are generated on the fly, locally, with tools/generate.py (needs
-# Python 3 + Pillow + numpy — this script checks for them first) into a
-# throwaway build directory that is deleted when the run ends. With no
-# --color and a terminal attached, you get an interactive multi-select menu
-# (arrows to move, Space to toggle, Enter to install); otherwise it installs
-# `white` on `dark`, unchanged from before.
+# There is no pre-generated colour library shipped in this repo. Run with no
+# --color and a terminal attached and you get an interactive multi-select
+# menu (arrows to move, Space to toggle, Enter to confirm) — the colours you
+# pick are generated locally with tools/generate.py (needs Python 3 + Pillow
+# + numpy — this script checks for them first) into build/colors/, which
+# persists in this checkout between runs. That step never touches rEFInd.
+#
+# To actually install one, run `./install.sh --color <name>` — if it's
+# already in build/colors/ from the step above this skips straight to
+# installing it (no regenerating what you already have); if not, it
+# generates just that one colour first. Installing always fully replaces
+# whatever colour was there before — no backup is kept, so the ESP doesn't
+# accumulate old copies.
 #
 # Re-runnable and idempotent. It only ever touches:
 #   <refind-dir>/themes/prism-minimal/     — the theme payload
@@ -29,7 +37,7 @@
 # system's own `refind-install` exactly once.
 #
 # Needs root to write the ESP; if you don't run it as root it re-execs itself
-# with sudo.
+# with sudo. The generate-only step (no --color) never needs root at all.
 
 set -euo pipefail
 
@@ -49,17 +57,21 @@ MARKER_END="# END Prism Minimal"
 DEFAULT_COLOR="white"
 DEFAULT_BG="dark"
 
-# COLOR is the single *active* colour (drives look_dir()/theme.conf, exactly
-# as before). COLOR_LIST is every colour to generate this run — one entry
-# unless the user picked several (--color a,b or the interactive menu); COLOR
-# is always the first of these in canonical (generate.py --list) order.
-# RAW_COLOR_ARGS collects --color tokens as given, before validation.
+# COLOR is the single colour to INSTALL (drives look_dir()/theme.conf).
+# COLOR_LIST is only used by the generate-only (interactive menu) path — the
+# set of colours to generate, no "active" one among them since nothing gets
+# installed there. RAW_COLOR_ARGS collects --color tokens as given, before
+# validation.
 COLOR="$DEFAULT_COLOR"
 declare -a RAW_COLOR_ARGS=()
 declare -a COLOR_LIST=()
 RESOLVED_COLOR_ARG=""
 AVAILABLE_COLORS_CACHE=""
-BUILD_DIR=""
+# Persistent local cache of generated looks — lives in this checkout, is
+# never deleted by this script, and is gitignored (never committed). Both
+# the generate-only step and --color install read/write here, so a colour
+# generated once is never regenerated on a later --color run.
+GENERATED_DIR="$SCRIPT_DIR/build/colors"
 BG="$DEFAULT_BG"
 REFIND_DIR_OVERRIDE=""
 DRY_RUN=0
@@ -85,7 +97,6 @@ die()  { printf '%s[error]%s %s\n' "$_r" "$_x" "$*" >&2; trap - EXIT; exit 1; }
 
 on_exit() {
   local status=$?
-  [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ] && rm -rf "$BUILD_DIR"
   [ "$status" -ne 0 ] && printf '%s[error]%s aborted (exit %s) — nothing was left half-written; safe to re-run.\n' "$_r" "$_x" "$status" >&2
   return 0
 }
@@ -171,16 +182,49 @@ add_color_arg() {
 }
 
 # The dir holding selection_big/small.png + icons/ for the chosen colour+bg,
-# inside this run's generated BUILD_DIR.
+# inside the persistent GENERATED_DIR cache.
 look_dir() {
   if [ "$BG" = "light" ]; then
-    printf '%s\n' "$BUILD_DIR/$COLOR/light"
+    printf '%s\n' "$GENERATED_DIR/$COLOR/light"
   else
-    printf '%s\n' "$BUILD_DIR/$COLOR"
+    printf '%s\n' "$GENERATED_DIR/$COLOR"
   fi
 }
 
 bg_image() { printf '%s\n' "$SCRIPT_DIR/backgrounds/$BG.png"; }
+
+# True if GENERATED_DIR/<colour> already holds a complete look (both
+# backgrounds) — lets ensure_generated() skip a colour that's already
+# sitting on disk from an earlier run instead of needlessly rebuilding it.
+is_cached() {
+  local d="$GENERATED_DIR/$1"
+  [ -f "$d/selection_big.png" ] && [ -f "$d/selection_small.png" ] \
+    && ls "$d"/icons/*.png >/dev/null 2>&1 \
+    && [ -f "$d/light/selection_big.png" ] && [ -f "$d/light/selection_small.png" ] \
+    && ls "$d/light/icons"/*.png >/dev/null 2>&1
+}
+
+# Generate every given colour that isn't already cached in GENERATED_DIR.
+# Colours already there are left completely untouched.
+ensure_generated() {
+  local c missing=()
+  for c in "$@"; do
+    is_cached "$c" || missing+=("$c")
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    info "already generated: $(
+      IFS=', '
+      echo "$*"
+    )"
+    return 0
+  fi
+  info "generating: $(
+    IFS=', '
+    echo "${missing[*]}"
+  )"
+  python3 "$GENERATE_PY" "${missing[@]}" --out-dir="$GENERATED_DIR" \
+    || die "tools/generate.py failed — see output above."
+}
 
 color_note() {
   case "$1" in
@@ -326,51 +370,35 @@ interactive_color_menu() {
   )$_x"
 }
 
-# Populates COLOR_LIST (every colour to generate) and COLOR (the single
-# active one, first of COLOR_LIST in canonical order) from either --color,
-# the interactive menu, or DEFAULT_COLOR — in that priority.
-resolve_color_selection() {
-  if [ "${#RAW_COLOR_ARGS[@]}" -gt 0 ]; then
-    local c valid=() bad=()
-    for c in "${RAW_COLOR_ARGS[@]}"; do
-      if available_colors | grep -qx "$c"; then valid+=("$c"); else bad+=("$c"); fi
-    done
-    if [ "${#bad[@]}" -gt 0 ]; then
-      local b
-      for b in "${bad[@]}"; do unknown_color_warning "$b"; done
-    fi
-    if [ "${#valid[@]}" -eq 0 ]; then
-      warn "no valid colours selected — falling back to default: $DEFAULT_COLOR"
-      valid=("$DEFAULT_COLOR")
-    fi
-    COLOR_LIST=("${valid[@]}")
-  elif [ "$UNINSTALL" -ne 1 ] && [ -t 0 ]; then
-    interactive_color_menu
-  else
-    COLOR_LIST=("$DEFAULT_COLOR")
+# Validates RAW_COLOR_ARGS against available_colors (warn + drop unknowns,
+# fall back to DEFAULT_COLOR if nothing valid survives) and picks the single
+# colour to install: the first surviving one in available_colors' canonical
+# order, deterministic regardless of how --color listed them or duplicates.
+# Used by the install path only — the generate-only path has no "active"
+# colour, it just generates whatever the menu checked.
+resolve_install_color() {
+  local c valid=() bad=()
+  for c in "${RAW_COLOR_ARGS[@]}"; do
+    if available_colors | grep -qx "$c"; then valid+=("$c"); else bad+=("$c"); fi
+  done
+  if [ "${#bad[@]}" -gt 0 ]; then
+    local b
+    for b in "${bad[@]}"; do unknown_color_warning "$b"; done
+  fi
+  if [ "${#valid[@]}" -eq 0 ]; then
+    warn "no valid colours selected — falling back to default: $DEFAULT_COLOR"
+    valid=("$DEFAULT_COLOR")
   fi
 
-  # De-duplicate COLOR_LIST and, from it, pick the active colour: the first
-  # entry in available_colors' canonical order, deterministic regardless of
-  # pick order (and regardless of a colour being named more than once).
-  local canon picked="" deduped=()
+  local canon picked=""
   while IFS= read -r canon; do
     local want
-    for want in "${COLOR_LIST[@]}"; do
-      if [ "$canon" = "$want" ]; then
-        deduped+=("$canon")
-        [ -z "$picked" ] && picked="$canon"
-        break
-      fi
+    for want in "${valid[@]}"; do
+      [ "$canon" = "$want" ] && { picked="$canon"; break 2; }
     done
   done < <(available_colors)
-  COLOR_LIST=("${deduped[@]}")
-  COLOR="${picked:-${COLOR_LIST[0]}}"
-
-  RESOLVED_COLOR_ARG="--color=$(
-    IFS=','
-    echo "${COLOR_LIST[*]}"
-  )"
+  COLOR="${picked:-${valid[0]}}"
+  RESOLVED_COLOR_ARG="--color=$COLOR"
 }
 
 # Every FAT/ESP-ish mount root worth searching, de-duplicated, existing only.
@@ -542,7 +570,7 @@ validate_installed() {
 
 # True if the installed theme dir already holds exactly what this run would
 # write (same files, same chosen colour) — lets a re-run skip the ESP copy
-# entirely instead of churning FAT files and rotating a backup every time.
+# entirely instead of needlessly churning FAT files.
 theme_files_current() {
   local target="$1" f rel ld
   [ -d "$target" ] || return 1
@@ -563,17 +591,10 @@ theme_files_current() {
 # ------------------------------------------------------------- install --
 
 do_install() {
-  local refind_dir conf target backup tmp body fresh=1
+  local refind_dir conf target staging backup tmp body fresh=1
 
   step "generating theme assets"
-  BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/prism-minimal.XXXXXX")"
-  info "colour(s) to generate: $(
-    IFS=', '
-    echo "${COLOR_LIST[*]}"
-  )"
-  python3 "$GENERATE_PY" "${COLOR_LIST[@]}" --out-dir="$BUILD_DIR" \
-    || die "tools/generate.py failed — see output above."
-  ok "generated ${#COLOR_LIST[@]} colour(s) -> $BUILD_DIR (will be removed when this run ends)"
+  ensure_generated "$COLOR"
 
   step "locating rEFInd"
   resolve_refind_dir
@@ -589,22 +610,14 @@ do_install() {
 
   step "plan"
   info "install theme to : $target"
-  info "colour           : $COLOR  ($(color_note "$COLOR"))  [active]"
-  if [ "${#COLOR_LIST[@]}" -gt 1 ]; then
-    local other=() c
-    for c in "${COLOR_LIST[@]}"; do [ "$c" != "$COLOR" ] && other+=("$c"); done
-    info "also generated    : $(
-      IFS=', '
-      echo "${other[*]}"
-    )"
-  fi
+  info "colour           : $COLOR  ($(color_note "$COLOR"))"
   info "background        : $BG"
   info "refind.conf       : $conf"
   info "managed line      : $INCLUDE_LINE"
   if [ "$fresh" -eq 0 ]; then
     info "theme files       : already current — will only check refind.conf"
   elif [ -d "$target" ]; then
-    info "theme files       : replacing (previous kept at ${target##*/}.previous)"
+    info "theme files       : replacing (previous colour fully removed, no backup kept)"
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -622,23 +635,28 @@ do_install() {
 
   if [ "$fresh" -eq 1 ]; then
     step "installing theme files"
-    if [ -d "$target" ]; then
-      rm -rf "$target.previous"
-      mv "$target" "$target.previous"
-      ok "previous theme moved to $target.previous"
-    fi
-    mkdir -p "$target"
+    # Build the new theme in a staging dir first, then swap it in with a
+    # single rm+mv — the previous colour (whatever it was) is fully replaced
+    # and no backup is kept, so the ESP never accumulates old copies. Also
+    # sweep any .previous/.new left by an older run or an earlier script
+    # version.
+    staging="$target.new"
+    rm -rf "$staging" "$target.previous"
+    mkdir -p "$staging"
 
     # plain cp only — never cp -a/-p and never `install -m`: the ESP is FAT,
     # which has no per-file ownership or mode, so anything that tries to
     # chown/chmod a file there is at best a no-op and at worst an error.
     local ld; ld="$(look_dir)"
-    cp "$SCRIPT_DIR/theme.conf" "$target/theme.conf"
-    cp "$(bg_image)"            "$target/background.png"
-    cp -r "$ld/icons"           "$target/icons"   # the set recoloured for this colour+bg
-    cp "$ld/selection_big.png"   "$target/selection_big.png"
-    cp "$ld/selection_small.png" "$target/selection_small.png"
-    ok "copied theme to $target"
+    cp "$SCRIPT_DIR/theme.conf" "$staging/theme.conf"
+    cp "$(bg_image)"            "$staging/background.png"
+    cp -r "$ld/icons"           "$staging/icons"   # the set recoloured for this colour+bg
+    cp "$ld/selection_big.png"   "$staging/selection_big.png"
+    cp "$ld/selection_small.png" "$staging/selection_small.png"
+
+    rm -rf "$target"
+    mv "$staging" "$target"
+    ok "installed theme to $target"
   else
     step "theme files already current — skipping copy"
   fi
@@ -687,6 +705,36 @@ do_install() {
   info "remove it entirely:                 sudo $SELF --uninstall"
 }
 
+# --------------------------------------------------------- generate-only --
+
+# The interactive-menu path: generate every picked colour into the
+# persistent GENERATED_DIR cache and stop — no rEFInd/ESP/root involved at
+# all. Installing a specific one afterwards is a separate `--color` run,
+# which reuses whatever's already here instead of regenerating it.
+do_generate_only() {
+  step "generating selected colours"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    warn "dry run — would generate: $(
+      IFS=', '
+      echo "${COLOR_LIST[*]}"
+    ) -> $GENERATED_DIR"
+    return 0
+  fi
+
+  ensure_generated "${COLOR_LIST[@]}"
+
+  trap - EXIT
+  step "done"
+  ok "ready in $GENERATED_DIR — nothing was installed yet."
+  info ""
+  info "install one of these now:"
+  local c
+  for c in "${COLOR_LIST[@]}"; do
+    info "  ./install.sh --color $c"
+  done
+}
+
 # ----------------------------------------------------------- uninstall --
 
 do_uninstall() {
@@ -725,9 +773,15 @@ do_uninstall() {
   else
     info "$target not present — nothing to remove"
   fi
+  # .previous is from an older version of this script (it no longer keeps
+  # one); .new would only exist if a run crashed mid-swap. Sweep both.
   if [ -d "$target.previous" ]; then
     rm -rf "$target.previous"
     ok "removed $target.previous"
+  fi
+  if [ -d "$target.new" ]; then
+    rm -rf "$target.new"
+    ok "removed $target.new"
   fi
   # tidy the themes/ parent, but only if empty (the user may keep other themes)
   if rmdir "$refind_dir/themes" 2>/dev/null; then
@@ -776,15 +830,30 @@ if [ "$LIST" -eq 1 ]; then
   exit 0
 fi
 
-if [ "$UNINSTALL" -ne 1 ]; then
-  check_dependencies
-  resolve_color_selection
+if [ "$UNINSTALL" -eq 1 ]; then
+  escalate_if_needed
+  do_uninstall
+  exit 0
 fi
 
-escalate_if_needed
+check_dependencies
 
-if [ "$UNINSTALL" -eq 1 ]; then
-  do_uninstall
+if [ "${#RAW_COLOR_ARGS[@]}" -gt 0 ]; then
+  # --color given: install exactly that one (reusing GENERATED_DIR if it's
+  # already there). Needs the ESP, so it may need root.
+  resolve_install_color
+  escalate_if_needed
+  do_install
+elif [ -t 0 ]; then
+  # No --color, a terminal is attached: pick colours to generate. This never
+  # touches rEFInd, so it never needs root — no escalate_if_needed here.
+  interactive_color_menu
+  do_generate_only
 else
+  # No --color, no terminal (piped/scripted run): keep the old plain
+  # default so a one-liner install still just works.
+  COLOR="$DEFAULT_COLOR"
+  RESOLVED_COLOR_ARG="--color=$COLOR"
+  escalate_if_needed
   do_install
 fi

@@ -7,34 +7,52 @@ A "look" here is a **colour** x a **background**:
   * colour     — white (default) + green red violet pink gray blue
                  + premium iridescent obsidian-purple / titanium-silver /
                  champagne-gold
+                 + premium gradient aurora / solaris / forest / rose-gold /
+                 cyberpunk / platinum — dark-background pieces where the
+                 gradient lives in the selection only; the icon stays plain
   * background — dark (black, default) or light (near-white)
 
-rEFInd can't tint just the focused icon, so the whole icon set is recoloured
-to the chosen hue; the selection is only an *outline* (rounded square on the OS
-row, circle on the tool row) — no fill, no glow. On the light background the
-hue is darkened for contrast and the icons go dark-on-white.
+rEFInd can't tint just the focused icon, so for SIMPLE/PREMIUM the whole icon
+set is recoloured to the chosen hue; the selection is an *outline* (rounded
+square on the OS row, circle on the tool row) — no fill, no glow. GRADIENT
+variants invert that: the icon stays plain white/ink and the outline gets a
+low-opacity fill plus an outer glow riding the same hue, still inside the
+same ring geometry. On the light background flat/iridescent/gradient hues are
+all darkened for contrast, and plain icons go dark-on-white.
 
 Every icon is also re-padded to a fixed content size so the row has consistent,
 generous spacing regardless of how tightly each source icon was cropped.
 
-Output (this script only writes here):
+There is no permanent, pre-generated `colors/` directory in this repository —
+colour variants are build products, generated on demand (by install.sh, or by
+hand) into a throwaway output directory.
+
+Output:
 
     backgrounds/<bg>.png                           solid colour, 64x64
-    colors/<colour>/selection_big.png              1024x1024 (dark bg)
-    colors/<colour>/selection_small.png            256x256
-    colors/<colour>/icons/*.png
-    colors/<colour>/light/selection_big.png                  (light bg)
-    colors/<colour>/light/selection_small.png
-    colors/<colour>/light/icons/*.png
+                                                     (only rewritten on a full,
+                                                     no-args / no --out-dir run)
+    <out>/<colour>/selection_big.png               1024x1024 (dark bg)
+    <out>/<colour>/selection_small.png             256x256
+    <out>/<colour>/icons/*.png
+    <out>/<colour>/light/selection_big.png                   (light bg)
+    <out>/<colour>/light/selection_small.png
+    <out>/<colour>/light/icons/*.png
+
+`<out>` is `--out-dir=PATH` if given, else `build/colors/` in this repo
+checkout (gitignored — a local scratch dir, never committed).
 
 Usage:
-    python3 tools/generate.py                 # regenerate everything
+    python3 tools/generate.py                 # regenerate everything into build/colors/
     python3 tools/generate.py green blue      # just these colours
+    python3 tools/generate.py --out-dir=/tmp/look white  # build one colour elsewhere
+    python3 tools/generate.py --list          # print available colour names, one per line
     python3 tools/generate.py --preview       # also write preview*.png
     python3 tools/generate.py --icons-dir=PATH   # read source icons from PATH
                                                  # instead of icons/
 
-Dependencies: Pillow, numpy   (dev-only — never shipped to the ESP).
+Dependencies: Pillow, numpy   (never shipped to the ESP — install.sh checks
+for these before it runs this script).
 """
 
 from __future__ import annotations
@@ -46,7 +64,7 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 REPO = Path(__file__).resolve().parent.parent
-COLORS_DIR = REPO / "colors"
+COLORS_DIR = REPO / "build" / "colors"   # default; override with --out-dir=PATH
 ICONS_DIR = REPO / "icons"
 BG_DIR = REPO / "backgrounds"
 
@@ -80,13 +98,48 @@ PREMIUM_PHASE: dict[str, float] = {
     "champagne-gold":  0.68,
 }
 
-ALL_VARIANTS = list(SIMPLE) + list(PREMIUM)
+# Premium gradients: a simple two-stop hue loop (start -> end -> back to
+# start), for the dark background specifically. Unlike PREMIUM above, these
+# don't tint the icon — recolor_icon() keeps the icon plain white/ink, same
+# as the "white" variant — the gradient lives only in the selection: border,
+# a low-opacity fill tile, and an outer glow (see render_outline()).
+GRADIENT: dict[str, list[str]] = {
+    "aurora":     ["#00E676", "#00D4FF"],
+    "solaris":    ["#FACC15", "#FB923C"],
+    "forest":     ["#22C55E", "#84CC16"],
+    "rose-gold":  ["#F472B6", "#FDE68A"],
+    "cyberpunk":  ["#FF0080", "#00E5FF"],
+    "platinum":   ["#9CA3AF", "#F3F4F6"],
+}
+
+GRADIENT_PHASE: dict[str, float] = {
+    "aurora":    0.00,
+    "solaris":   0.17,
+    "forest":    0.34,
+    "rose-gold": 0.51,
+    "cyberpunk": 0.68,
+    "platinum":  0.85,
+}
+
+# One combined lookup for the angular hue-cycle offset — used by every
+# gradient-painted variant, iridescent PREMIUM or two-stop GRADIENT alike.
+CYCLE_PHASE: dict[str, float] = {**PREMIUM_PHASE, **GRADIENT_PHASE}
+
+ALL_VARIANTS = list(SIMPLE) + list(PREMIUM) + list(GRADIENT)
 
 # Backgrounds and how the hue shifts for each.
 BACKGROUNDS: dict[str, str] = {"dark": "#000000", "light": "#F4F4F5"}
 LIGHT_DARKEN_SIMPLE = 0.52   # flat hue x this on the light background
-LIGHT_DARKEN_PREMIUM = 0.58
+LIGHT_DARKEN_PREMIUM = 0.58  # also used for GRADIENT — same treatment
 WHITE_ON_LIGHT = "#2B2B2D"   # the "white" variant's ink on the light background
+
+# GRADIENT-only selection extras: a translucent fill inside the ring and a
+# soft glow outside it, both painted with the same hue field as the border
+# stroke. Existing SIMPLE/PREMIUM variants never take this path — their
+# render_outline() output is byte-for-byte what it always was.
+GRADIENT_FILL_ALPHA = 0.14   # low-opacity tile behind the icon
+GRADIENT_GLOW_ALPHA = 0.35   # glow strength right at the ring's outer edge
+GRADIENT_GLOW_FALLOFF = 1.6  # >1 = fast-then-long fade, not a linear ramp
 
 # --------------------------------------------------------------- geometry --
 
@@ -199,8 +252,9 @@ def downscale(arr: np.ndarray, size: int) -> np.ndarray:
 
 def paint(variant: str, bg: str):
     """The colour for a (variant, background): ('flat', rgb) or ('grad', lut)."""
-    if variant in PREMIUM:
-        lut = gradient_lut(PREMIUM[variant])
+    if variant in PREMIUM or variant in GRADIENT:
+        stops = PREMIUM[variant] if variant in PREMIUM else GRADIENT[variant]
+        lut = gradient_lut(stops)
         return "grad", lut * (LIGHT_DARKEN_PREMIUM if bg == "light" else 1.0)
     if variant == "white":
         return "flat", hex_rgb("#FFFFFF" if bg == "dark" else WHITE_ON_LIGHT)
@@ -235,12 +289,25 @@ def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
         theta = np.arctan2(py, px) / (2.0 * np.pi) + 0.5
         if spec["shape"] == "square":  # even the hue out across the corners
             theta = theta + 0.18 * ((xs / hi) * 0.58 + (ys / hi) * 0.42)
-        t = np.mod((theta + PREMIUM_PHASE[variant]) * cycles, 1.0)
+        t = np.mod((theta + CYCLE_PHASE[variant]) * cycles, 1.0)
         stroke_rgb = downscale(lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)], size)
     else:
         stroke_rgb = np.broadcast_to(col, (size, size, 3)).astype(float)
 
     alpha = downscale(ring, size) * BORDER_ALPHA
+
+    # GRADIENT-only extras: a low-opacity fill inside the ring and a soft glow
+    # outside it, both riding the same hue field as the stroke. SIMPLE/PREMIUM
+    # variants never touch this — their output is unchanged from before.
+    if variant in GRADIENT:
+        fill_mask = downscale(smoothstep(aa, -aa, d_in), size)
+        glow_span = max(spec["margin"] * ss, 1.0)
+        glow_raw = np.clip(1.0 - np.maximum(d_out, 0.0) / glow_span, 0.0, 1.0) ** GRADIENT_GLOW_FALLOFF
+        glow_mask = downscale(np.where(d_out > 0.0, glow_raw, 0.0), size)
+        alpha = np.clip(
+            alpha + fill_mask * GRADIENT_FILL_ALPHA + glow_mask * GRADIENT_GLOW_ALPHA,
+            0.0, 1.0)
+
     rgba = np.clip(np.dstack([stroke_rgb, alpha]), 0.0, 1.0)
     return Image.fromarray(
         clear_transparent_rgb((rgba * 255.0 + 0.5).astype(np.uint8)), "RGBA")
@@ -286,17 +353,25 @@ def pad_icon(img: Image.Image, out: int, sharpen: bool = True, feather: float = 
 
 def recolor_icon(padded: Image.Image, variant: str, bg: str) -> Image.Image:
     a = np.asarray(padded.convert("RGBA"), dtype=float) / 255.0
-    if variant == "white" and bg == "dark":  # keep as-is (bar the transparent-RGB clear)
+    # GRADIENT variants colour only the selection (border/fill/glow) — the
+    # icon itself stays plain, exactly like "white": untouched on dark ink
+    # on light, so it's still visible against the near-white background.
+    if (variant == "white" and bg == "dark") or (variant in GRADIENT and bg == "dark"):
         return Image.fromarray(
             clear_transparent_rgb((a * 255.0 + 0.5).astype(np.uint8)), "RGBA")
     alpha = a[..., 3]
     h, w = alpha.shape
+    if variant in GRADIENT:  # bg == "light" here (dark handled above)
+        rgb = np.broadcast_to(hex_rgb(WHITE_ON_LIGHT), (h, w, 3))
+        out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
+        return Image.fromarray(
+            clear_transparent_rgb((out * 255.0 + 0.5).astype(np.uint8)), "RGBA")
     mode, col = paint(variant, bg)
     if mode == "grad":
         lut = col
         ys, xs = np.mgrid[0:h, 0:w].astype(float)
         t = np.mod(((xs / max(w - 1, 1)) * 0.62 + (ys / max(h - 1, 1)) * 0.38)
-                   * 1.25 + PREMIUM_PHASE[variant], 1.0)
+                   * 1.25 + CYCLE_PHASE[variant], 1.0)
         rgb = lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)]
     else:
         rgb = np.broadcast_to(col, (h, w, 3))
@@ -339,7 +414,7 @@ def build(variant: str) -> None:
         render_outline("small", variant, bg).save(d / "selection_small.png", optimize=True)
         for name, pic in padded.items():
             recolor_icon(pic, variant, bg).save(d / "icons" / name, optimize=True)
-    print(f"  {variant:16s} -> colors/{variant}/  (+ light/)  {len(sources)} icons x2")
+    print(f"  {variant:16s} -> {COLORS_DIR}/{variant}/  (+ light/)  {len(sources)} icons x2")
 
 
 # ----------------------------------------------------------------- preview --
@@ -433,13 +508,22 @@ def make_menu_preview(variants: list[str]) -> None:
 
 
 def main(argv: list[str]) -> int:
+    if "--list" in argv:
+        for v in ALL_VARIANTS:
+            print(v)
+        return 0
+
     args = [a for a in argv if not a.startswith("--")]
     flags = {a for a in argv if a.startswith("--")}
 
-    global ICONS_DIR
+    global ICONS_DIR, COLORS_DIR
+    out_dir_explicit = False
     for a in flags:
         if a.startswith("--icons-dir="):
             ICONS_DIR = Path(a.split("=", 1)[1]).expanduser().resolve()
+        elif a.startswith("--out-dir="):
+            COLORS_DIR = Path(a.split("=", 1)[1]).expanduser().resolve()
+            out_dir_explicit = True
     if not ICONS_DIR.is_dir():
         print(f"icons dir not found: {ICONS_DIR}", file=sys.stderr)
         return 2
@@ -452,7 +536,13 @@ def main(argv: list[str]) -> int:
         return 2
 
     print(f"source icons: {ICONS_DIR}")
-    build_backgrounds()
+    print(f"output: {COLORS_DIR}")
+    # Backgrounds are committed source (backgrounds/dark.png, light.png), not a
+    # per-colour build product — only touch them on a full, in-repo rebuild
+    # (no --out-dir), never when install.sh drives a narrow, throwaway build.
+    if not out_dir_explicit:
+        build_backgrounds()
+    COLORS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"generating {len(variants)} colour(s) x 2 backgrounds")
     for v in variants:
         build(v)

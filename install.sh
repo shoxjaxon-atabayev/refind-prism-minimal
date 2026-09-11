@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Prism Minimal — installer for a minimal rEFInd boot theme with colour variants.
 #
-#   ./install.sh                    detect rEFInd, install white on a dark background
-#   ./install.sh --color blue       install (or just restyle) to a colour
+#   ./install.sh                    interactive colour picker, dark background
+#   ./install.sh --color blue       install (or just restyle) to a colour, no prompt
+#   ./install.sh --color blue,red   generate several; the first (canonical order) is active
 #   ./install.sh --background light  put it on a near-white background instead
 #   ./install.sh --list             list the available colours and backgrounds
 #   ./install.sh --dry-run          print the plan, change nothing
@@ -11,6 +12,14 @@
 #   ./install.sh --deploy-refind    run the system's `refind-install` first if
 #                                   rEFInd isn't on the ESP yet
 #   ./install.sh --uninstall        remove the theme, revert refind.conf
+#
+# There is no pre-generated colour library shipped in this repo. Colour
+# variants are generated on the fly, locally, with tools/generate.py (needs
+# Python 3 + Pillow + numpy — this script checks for them first) into a
+# throwaway build directory that is deleted when the run ends. With no
+# --color and a terminal attached, you get an interactive multi-select menu
+# (arrows to move, Space to toggle, Enter to install); otherwise it installs
+# `white` on `dark`, unchanged from before.
 #
 # Re-runnable and idempotent. It only ever touches:
 #   <refind-dir>/themes/prism-minimal/     — the theme payload
@@ -40,7 +49,17 @@ MARKER_END="# END Prism Minimal"
 DEFAULT_COLOR="white"
 DEFAULT_BG="dark"
 
+# COLOR is the single *active* colour (drives look_dir()/theme.conf, exactly
+# as before). COLOR_LIST is every colour to generate this run — one entry
+# unless the user picked several (--color a,b or the interactive menu); COLOR
+# is always the first of these in canonical (generate.py --list) order.
+# RAW_COLOR_ARGS collects --color tokens as given, before validation.
 COLOR="$DEFAULT_COLOR"
+declare -a RAW_COLOR_ARGS=()
+declare -a COLOR_LIST=()
+RESOLVED_COLOR_ARG=""
+AVAILABLE_COLORS_CACHE=""
+BUILD_DIR=""
 BG="$DEFAULT_BG"
 REFIND_DIR_OVERRIDE=""
 DRY_RUN=0
@@ -66,6 +85,7 @@ die()  { printf '%s[error]%s %s\n' "$_r" "$_x" "$*" >&2; trap - EXIT; exit 1; }
 
 on_exit() {
   local status=$?
+  [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ] && rm -rf "$BUILD_DIR"
   [ "$status" -ne 0 ] && printf '%s[error]%s aborted (exit %s) — nothing was left half-written; safe to re-run.\n' "$_r" "$_x" "$status" >&2
   return 0
 }
@@ -102,21 +122,61 @@ normalise_bg() {
   esac
 }
 
+GENERATE_PY="$SCRIPT_DIR/tools/generate.py"
+
+# Canonical colour names, in the generator's own order — cached after the
+# first call since it shells out to python3.
 available_colors() {
-  local d
-  for d in "$SCRIPT_DIR"/colors/*/; do
-    [ -d "$d" ] || continue
-    [ -f "${d}selection_big.png" ] && [ -f "${d}selection_small.png" ] || continue
-    basename "$d"
-  done | sort
+  if [ -z "$AVAILABLE_COLORS_CACHE" ]; then
+    AVAILABLE_COLORS_CACHE="$(python3 "$GENERATE_PY" --list)" \
+      || die "'python3 $GENERATE_PY --list' failed — check your Python/Pillow/numpy install."
+  fi
+  printf '%s\n' "$AVAILABLE_COLORS_CACHE"
 }
 
-# The dir holding selection_big/small.png + icons/ for the chosen colour+bg.
+# "obsidian-purple" -> "Obsidian Purple"
+display_name() {
+  local word out=""
+  for word in ${1//-/ }; do
+    out="$out${out:+ }${word^}"
+  done
+  printf '%s\n' "$out"
+}
+
+check_dependencies() {
+  step "checking dependencies"
+  command -v python3 >/dev/null 2>&1 \
+    || die "python3 not found — install Python 3 (e.g. pacman -S python)."
+  python3 -c "import PIL" >/dev/null 2>&1 \
+    || die "Python module 'Pillow' not found — install it: pip install Pillow  (or: pacman -S python-pillow)"
+  python3 -c "import numpy" >/dev/null 2>&1 \
+    || die "Python module 'numpy' not found — install it: pip install numpy  (or: pacman -S python-numpy)"
+  ok "python3 + Pillow + numpy available"
+}
+
+unknown_color_warning() {
+  printf '%s⚠ Unknown color:%s %s\n' "$_y" "$_x" "$1" >&2
+  printf '  Available colors: %s\n' "$(available_colors | tr '\n' ' ')" >&2
+}
+
+# Split "$1" on commas, normalise each token, append non-empty ones to
+# RAW_COLOR_ARGS. Handles both --color a,b and repeated --color a --color b.
+add_color_arg() {
+  local raw="$1" tok toks
+  IFS=',' read -ra toks <<< "$raw"
+  for tok in "${toks[@]}"; do
+    tok="$(normalise_color "$tok")"
+    [ -n "$tok" ] && RAW_COLOR_ARGS+=("$tok")
+  done
+}
+
+# The dir holding selection_big/small.png + icons/ for the chosen colour+bg,
+# inside this run's generated BUILD_DIR.
 look_dir() {
   if [ "$BG" = "light" ]; then
-    printf '%s\n' "$SCRIPT_DIR/colors/$COLOR/light"
+    printf '%s\n' "$BUILD_DIR/$COLOR/light"
   else
-    printf '%s\n' "$SCRIPT_DIR/colors/$COLOR"
+    printf '%s\n' "$BUILD_DIR/$COLOR"
   fi
 }
 
@@ -130,6 +190,12 @@ color_note() {
     obsidian-purple) echo "premium · iridescent violet→magenta→teal" ;;
     titanium-silver) echo "premium · iridescent brushed silver" ;;
     champagne-gold)  echo "premium · iridescent warm gold foil" ;;
+    aurora)          echo "premium gradient · emerald → cyan" ;;
+    solaris)         echo "premium gradient · amber → orange" ;;
+    forest)          echo "premium gradient · green → lime" ;;
+    rose-gold)       echo "premium gradient · pink → champagne" ;;
+    cyberpunk)       echo "premium gradient · magenta → cyan" ;;
+    platinum)        echo "premium gradient · cool grey → white" ;;
     *)               echo "" ;;
   esac
 }
@@ -139,7 +205,12 @@ reexec_with_sudo() {
     || die "need root to work with the ESP, and sudo isn't installed — re-run this as root."
   info "$1"
   trap - EXIT
-  exec sudo -- "$SELF" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+  # Re-run with the already-resolved colour selection appended, so a re-exec
+  # (mid-flow, e.g. from ensure_writable) never re-prompts an interactive menu
+  # or re-parses an ambiguous --color; last --color on the line wins.
+  local args=(${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"})
+  [ -n "$RESOLVED_COLOR_ARG" ] && args+=("$RESOLVED_COLOR_ARG")
+  exec sudo -- "$SELF" ${args[@]+"${args[@]}"}
 }
 
 # Re-exec with sudo up front only if we can't even *look* for rEFInd unprivileged
@@ -167,6 +238,134 @@ ensure_writable() {
   [ "$(id -u)" -eq 0 ] && return 0
   [ -w "$1" ] && return 0
   reexec_with_sudo "not root — re-running under sudo to write $1…"
+}
+
+# ---------------------------------------------------------- colour picker --
+
+# Interactive multi-select menu over a real TTY: ↑/↓ move, Space toggles,
+# Enter confirms. Sets COLOR_LIST. Falls back to DEFAULT_COLOR if nothing
+# ends up checked.
+interactive_color_menu() {
+  local -a names=() checked=()
+  local n i idx=0 total key rest
+
+  while IFS= read -r n; do
+    names+=("$n")
+    if [ "$n" = "$DEFAULT_COLOR" ]; then checked+=(1); else checked+=(0); fi
+  done < <(available_colors)
+  total=${#names[@]}
+
+  printf '\n%sPrism Minimal%s\n' "$_b" "$_x"
+  printf '─────────────\n\n'
+  printf 'Select theme colours:\n\n'
+
+  local drawn=0
+  draw_menu() {
+    [ "$drawn" -eq 1 ] && printf '\033[%dA' "$total"
+    drawn=1
+    local j mark cursor note label
+    for ((j = 0; j < total; j++)); do
+      if [ "${checked[$j]}" -eq 1 ]; then mark="${_g}◉${_x}"; else mark="◯"; fi
+      if [ "$j" -eq "$idx" ]; then cursor="${_b}❯${_x}"; else cursor=" "; fi
+      label="$(display_name "${names[$j]}")"
+      note="$(color_note "${names[$j]}")"
+      printf '\033[2K%s %s %-18s %s\n' "$cursor" "$mark" "$label" "$note"
+    done
+  }
+
+  local old_stty
+  old_stty="$(stty -g)"
+  restore_tty() { stty "$old_stty" 2>/dev/null || true; printf '\033[?25h' >&2; }
+  trap 'restore_tty; die "aborted."' INT TERM
+  stty -echo -icanon time 0 min 0
+  printf '\033[?25l'
+
+  draw_menu
+  printf '\n\033[2K%s↑/↓%s Navigate   %sSpace%s Select   %sEnter%s Install\n' \
+    "$_b" "$_x" "$_b" "$_x" "$_b" "$_x"
+
+  while true; do
+    key=""
+    IFS= read -rsn1 key || true
+    case "$key" in
+      $'\x1b')
+        rest=""
+        IFS= read -rsn2 -t 0.05 rest || true
+        case "$rest" in
+          '[A') idx=$(((idx - 1 + total) % total)) ;;
+          '[B') idx=$(((idx + 1) % total)) ;;
+        esac
+        ;;
+      ' ') checked[$idx]=$((1 - checked[$idx])) ;;
+      '' | $'\n' | $'\r') break ;;
+      q | Q) restore_tty; die "aborted." ;;
+    esac
+    draw_menu
+  done
+
+  restore_tty
+  trap - INT TERM
+  printf '\n'
+
+  COLOR_LIST=()
+  for ((i = 0; i < total; i++)); do
+    [ "${checked[$i]}" -eq 1 ] && COLOR_LIST+=("${names[$i]}")
+  done
+  if [ "${#COLOR_LIST[@]}" -eq 0 ]; then
+    warn "no colours selected — falling back to default: $DEFAULT_COLOR"
+    COLOR_LIST=("$DEFAULT_COLOR")
+  fi
+  info "selected: $_b$(
+    IFS=', '
+    echo "${COLOR_LIST[*]}"
+  )$_x"
+}
+
+# Populates COLOR_LIST (every colour to generate) and COLOR (the single
+# active one, first of COLOR_LIST in canonical order) from either --color,
+# the interactive menu, or DEFAULT_COLOR — in that priority.
+resolve_color_selection() {
+  if [ "${#RAW_COLOR_ARGS[@]}" -gt 0 ]; then
+    local c valid=() bad=()
+    for c in "${RAW_COLOR_ARGS[@]}"; do
+      if available_colors | grep -qx "$c"; then valid+=("$c"); else bad+=("$c"); fi
+    done
+    if [ "${#bad[@]}" -gt 0 ]; then
+      local b
+      for b in "${bad[@]}"; do unknown_color_warning "$b"; done
+    fi
+    if [ "${#valid[@]}" -eq 0 ]; then
+      warn "no valid colours selected — falling back to default: $DEFAULT_COLOR"
+      valid=("$DEFAULT_COLOR")
+    fi
+    COLOR_LIST=("${valid[@]}")
+  elif [ "$UNINSTALL" -ne 1 ] && [ -t 0 ]; then
+    interactive_color_menu
+  else
+    COLOR_LIST=("$DEFAULT_COLOR")
+  fi
+
+  # De-duplicate COLOR_LIST and, from it, pick the active colour: the first
+  # entry in available_colors' canonical order, deterministic regardless of
+  # pick order (and regardless of a colour being named more than once).
+  local canon picked="" deduped=()
+  while IFS= read -r canon; do
+    local want
+    for want in "${COLOR_LIST[@]}"; do
+      if [ "$canon" = "$want" ]; then
+        deduped+=("$canon")
+        [ -z "$picked" ] && picked="$canon"
+        break
+      fi
+    done
+  done < <(available_colors)
+  COLOR_LIST=("${deduped[@]}")
+  COLOR="${picked:-${COLOR_LIST[0]}}"
+
+  RESOLVED_COLOR_ARG="--color=$(
+    IFS=','
+    echo "${COLOR_LIST[*]}"
+  )"
 }
 
 # Every FAT/ESP-ish mount root worth searching, de-duplicated, existing only.
@@ -293,10 +492,11 @@ strip_block() {
 
 validate_source() {
   step "checking theme source"
-  local missing=0 f
+  local missing=0
   [ -f "$SCRIPT_DIR/theme.conf" ] || { warn "missing: theme.conf"; missing=1; }
-  [ -d "$SCRIPT_DIR/colors" ] || { warn "missing: colors/"; missing=1; }
+  [ -d "$SCRIPT_DIR/icons" ] || { warn "missing: icons/"; missing=1; }
   [ -d "$SCRIPT_DIR/backgrounds" ] || { warn "missing: backgrounds/"; missing=1; }
+  [ -f "$GENERATE_PY" ] || { warn "missing: tools/generate.py"; missing=1; }
   [ "$missing" -eq 0 ] \
     || die "theme source is incomplete — run this from inside the refind-prism-minimal checkout."
 
@@ -314,7 +514,7 @@ validate_source() {
   local ld; ld="$(look_dir)"
   { [ -f "$ld/selection_big.png" ] && [ -f "$ld/selection_small.png" ] \
       && ls "$ld"/icons/*.png >/dev/null 2>&1; } \
-    || die "$ld is incomplete — regenerate with tools/generate.py."
+    || die "$ld is incomplete — tools/generate.py did not produce it."
   ok "source OK — colour: $COLOR · background: $BG"
 }
 
@@ -360,6 +560,16 @@ theme_files_current() {
 do_install() {
   local refind_dir conf target backup tmp body fresh=1
 
+  step "generating theme assets"
+  BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/prism-minimal.XXXXXX")"
+  info "colour(s) to generate: $(
+    IFS=', '
+    echo "${COLOR_LIST[*]}"
+  )"
+  python3 "$GENERATE_PY" "${COLOR_LIST[@]}" --out-dir="$BUILD_DIR" \
+    || die "tools/generate.py failed — see output above."
+  ok "generated ${#COLOR_LIST[@]} colour(s) -> $BUILD_DIR (will be removed when this run ends)"
+
   step "locating rEFInd"
   resolve_refind_dir
   refind_dir="$REFIND_DIR"
@@ -374,7 +584,15 @@ do_install() {
 
   step "plan"
   info "install theme to : $target"
-  info "colour           : $COLOR  ($(color_note "$COLOR"))"
+  info "colour           : $COLOR  ($(color_note "$COLOR"))  [active]"
+  if [ "${#COLOR_LIST[@]}" -gt 1 ]; then
+    local other=() c
+    for c in "${COLOR_LIST[@]}"; do [ "$c" != "$COLOR" ] && other+=("$c"); done
+    info "also generated    : $(
+      IFS=', '
+      echo "${other[*]}"
+    )"
+  fi
   info "background        : $BG"
   info "refind.conf       : $conf"
   info "managed line      : $INCLUDE_LINE"
@@ -521,8 +739,8 @@ do_uninstall() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --color)            COLOR="$(normalise_color "${2:-}")"; shift 2 ;;
-    --color=*)          COLOR="$(normalise_color "${1#*=}")"; shift ;;
+    --color)            add_color_arg "${2:-}"; shift 2 ;;
+    --color=*)          add_color_arg "${1#*=}"; shift ;;
     --background | --bg) BG="$(normalise_bg "${2:-}")"; shift 2 ;;
     --background=* | --bg=*) BG="$(normalise_bg "${1#*=}")"; shift ;;
     --refind-dir)       REFIND_DIR_OVERRIDE="${2:-}"; shift 2 ;;
@@ -537,7 +755,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# A cheap sanity check on the checkout before we bother with anything else —
+# the authoritative validate_source() call is inside do_install (post-sudo).
+if [ ! -d "$SCRIPT_DIR/icons" ] || [ ! -f "$GENERATE_PY" ]; then
+  die "icons/ or tools/generate.py missing here — run this from inside the refind-prism-minimal checkout."
+fi
+
 if [ "$LIST" -eq 1 ]; then
+  check_dependencies
   printf '%scolours%s  (--color)\n\n' "$_b" "$_x"
   while IFS= read -r c; do printf '  %-16s %s\n' "$c" "$(color_note "$c")"; done < <(available_colors)
   printf '\n%sbackgrounds%s  (--background)\n\n  %-16s %s\n  %-16s %s\n' \
@@ -546,10 +771,9 @@ if [ "$LIST" -eq 1 ]; then
   exit 0
 fi
 
-# A cheap sanity check on the checkout before we bother escalating — but the
-# authoritative validate_source() call is inside do_install (post-sudo).
-if [ "$UNINSTALL" -ne 1 ] && [ ! -d "$SCRIPT_DIR/colors" ]; then
-  die "no colors/ dir here — run this from inside the refind-prism-minimal checkout."
+if [ "$UNINSTALL" -ne 1 ]; then
+  check_dependencies
+  resolve_color_selection
 fi
 
 escalate_if_needed

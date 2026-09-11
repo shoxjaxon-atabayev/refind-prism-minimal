@@ -232,11 +232,14 @@ def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
 
 # ------------------------------------------------------------------ icons --
 
-def pad_icon(img: Image.Image, out: int) -> Image.Image:
-    """Re-centre an icon's content to ICON_CONTENT of an `out`-px canvas, then
-    crisp the edges: a light unsharp mask undoes interpolation softness and a
-    steep contrast curve on the alpha pulls the anti-aliased border back to a
-    tight ~1 px — so it still reads clean after rEFInd's own downscale."""
+def pad_icon(img: Image.Image, out: int, sharpen: bool = True) -> Image.Image:
+    """Re-centre an icon's content to ICON_CONTENT of an `out`-px canvas. When
+    `sharpen`, also crisp the edges: a light unsharp mask undoes interpolation
+    softness and a steep contrast curve on the alpha pulls the anti-aliased
+    border back to a tight ~1 px — so it still reads clean after rEFInd's own
+    downscale. Function/tool icons render at a flat 128px with `sharpen`
+    off: that post-processing was tuned for the big OS icons' 1024->200
+    downscale and just adds ringing ahead of the small icons' 128->50 one."""
     im = img.convert("RGBA")
     a = np.asarray(im)
     ys, xs = np.where(a[..., 3] > 8)
@@ -248,6 +251,8 @@ def pad_icon(img: Image.Image, out: int) -> Image.Image:
     content = content.resize((nw, nh), Image.LANCZOS)
     canvas = Image.new("RGBA", (out, out), (0, 0, 0, 0))
     canvas.alpha_composite(content, ((out - nw) // 2, (out - nh) // 2))
+    if not sharpen:
+        return canvas
 
     canvas = canvas.filter(ImageFilter.UnsharpMask(radius=1.4, percent=90, threshold=0))
     arr = np.asarray(canvas, dtype=float) / 255.0
@@ -300,7 +305,8 @@ def is_big_icon(name: str) -> bool:
 
 def build(variant: str) -> None:
     sources = sorted(ICONS_DIR.glob("*.png"))
-    padded = {f.name: pad_icon(Image.open(f), OUT_BIG if is_big_icon(f.name) else OUT_SMALL)
+    padded = {f.name: pad_icon(Image.open(f), OUT_BIG if is_big_icon(f.name) else OUT_SMALL,
+                                sharpen=is_big_icon(f.name))
               for f in sources}
     for bg in ("dark", "light"):
         d = look_dir(variant, bg)

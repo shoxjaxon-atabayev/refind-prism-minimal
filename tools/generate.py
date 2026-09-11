@@ -95,20 +95,22 @@ WHITE_ON_LIGHT = "#2B2B2D"   # the "white" variant's ink on the light background
 # big_icon_size in theme.conf, gives big icons AND wide, even gaps.
 ICON_CONTENT = 0.58
 
-# Master resolution multiplier. The icons in icons/ are 4x hi-res masters
-# (Real-ESRGAN x4plus upscales of the originals), so every generated asset is
-# emitted at 4x the historical size — OS icons 1024, tool icons 512, selection
-# outlines to match. theme.conf still asks for big_icon_size 200 /
-# small_icon_size 50, so rEFInd only ever *downscales* these at boot → crisp.
+# Master resolution multiplier. The OS icons in icons/ are 4x hi-res masters
+# (Real-ESRGAN x4plus upscales of the originals), so every big asset is
+# emitted at 4x the historical size — OS icons 1024, selection outlines to
+# match. theme.conf still asks for big_icon_size 200 / small_icon_size 50, so
+# rEFInd only ever *downscales* these at boot → crisp.
 SCALE = 4
 
-# Output icons at these sizes (256 / 128 before SCALE).
-OUT_BIG, OUT_SMALL = 256 * SCALE, 128 * SCALE
+# OS icons emit at 256*SCALE (1024), downscaled to big_icon_size at boot.
+# Function/tool icons emit at a flat 128 — small_icon_size is 50 and rEFInd's
+# naive 2x2 bilinear downscaler takes 128 -> 50 far more cleanly than 512 -> 50.
+OUT_BIG, OUT_SMALL = 256 * SCALE, 128
 
-# The outline canvas is OUT_BIG / (OUT_SMALL // 2); rEFInd scales it down to
-# big_icon_size / small_icon_size (200 / 50 in theme.conf) — so `border` is a
-# bit more than the thin on-screen stroke. `margin` keeps the outline just
-# outside the re-padded icon. All four measures scale with SCALE.
+# The big outline canvas is 256*SCALE, the small one 64*SCALE; rEFInd scales
+# them down to big_icon_size / small_icon_size (200 / 50 in theme.conf) — so
+# `border` is a bit more than the thin on-screen stroke. `margin` keeps the
+# outline just outside the re-padded icon. All four measures scale with SCALE.
 SPECS = {
     "big":   dict(px=256 * SCALE, shape="square",
                   margin=34.0 * SCALE, radius=7.0 * SCALE, border=3.4 * SCALE),

@@ -236,7 +236,6 @@ color_note() {
     champagne-gold)  echo "premium · iridescent warm gold foil" ;;
     aurora)          echo "premium gradient · emerald → cyan" ;;
     solaris)         echo "premium gradient · amber → orange" ;;
-    forest)          echo "premium gradient · green → lime" ;;
     rose-gold)       echo "premium gradient · pink → champagne" ;;
     cyberpunk)       echo "premium gradient · magenta → cyan" ;;
     platinum)        echo "premium gradient · cool grey → white" ;;

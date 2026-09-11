@@ -7,8 +7,8 @@ A "look" here is a **colour** x a **background**:
   * colour     — white (default) + green red violet pink gray blue
                  + premium iridescent obsidian-purple / titanium-silver /
                  champagne-gold
-                 + premium gradient aurora / solaris / forest / rose-gold /
-                 cyberpunk / platinum — dark-background pieces
+                 + premium gradient aurora / solaris / rose-gold / cyberpunk /
+                 platinum — dark-background pieces
   * background — dark (black, default) or light (near-white)
 
 rEFInd can't tint just the focused icon, so the whole icon set is recoloured
@@ -105,7 +105,6 @@ PREMIUM_PHASE: dict[str, float] = {
 GRADIENT: dict[str, list[str]] = {
     "aurora":     ["#00E676", "#00D4FF"],
     "solaris":    ["#FACC15", "#FB923C"],
-    "forest":     ["#22C55E", "#84CC16"],
     "rose-gold":  ["#F472B6", "#FDE68A"],
     "cyberpunk":  ["#FF0080", "#00E5FF"],
     "platinum":   ["#9CA3AF", "#F3F4F6"],
@@ -113,11 +112,10 @@ GRADIENT: dict[str, list[str]] = {
 
 GRADIENT_PHASE: dict[str, float] = {
     "aurora":    0.00,
-    "solaris":   0.17,
-    "forest":    0.34,
-    "rose-gold": 0.51,
-    "cyberpunk": 0.68,
-    "platinum":  0.85,
+    "solaris":   0.20,
+    "rose-gold": 0.40,
+    "cyberpunk": 0.60,
+    "platinum":  0.80,
 }
 
 # One combined lookup for the angular hue-cycle offset — used by every

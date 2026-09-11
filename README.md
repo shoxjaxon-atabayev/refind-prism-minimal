@@ -3,7 +3,7 @@
 A minimal [rEFInd](https://www.rodsbooks.com/refind/) boot theme. One solid
 background, silhouette icons, no labels. Pick a colour and the icons and
 selection outline turn that colour. The entry you're about to boot gets a
-thin outline: a square on the top row, a circle on the tools row. The six
+thin outline: a square on the top row, a circle on the tools row. The five
 premium gradients (below) work the other way round — icons stay plain and
 the gradient lives in the selection: border, a soft fill, and a glow.
 
@@ -34,7 +34,6 @@ Select theme colours:
 ❯ ◉ White             the default — plain white / dark ink
   ◯ Aurora             premium gradient · emerald → cyan
   ◯ Solaris            premium gradient · amber → orange
-  ◯ Forest             premium gradient · green → lime
   ◯ Rose Gold          premium gradient · pink → champagne
   ◯ Cyberpunk          premium gradient · magenta → cyan
   ◯ Platinum           premium gradient · cool grey → white
@@ -76,9 +75,9 @@ already in `build/colors/`, this generates just that one first:
 
 Colours: `white` `green` `red` `violet` `pink` `gray` `blue`
 `obsidian-purple` `titanium-silver` `champagne-gold` `aurora` `solaris`
-`forest` `rose-gold` `cyberpunk` `platinum`
+`rose-gold` `cyberpunk` `platinum`
 &nbsp;&nbsp;*(`obsidian-purple`/`titanium-silver`/`champagne-gold` shimmer;
-`aurora`/`solaris`/`forest`/`rose-gold`/`cyberpunk`/`platinum` are premium
+`aurora`/`solaris`/`rose-gold`/`cyberpunk`/`platinum` are premium
 gradients for the dark background)*
 
 An unknown colour name warns and falls back rather than aborting the

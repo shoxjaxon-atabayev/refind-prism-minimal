@@ -824,7 +824,7 @@ if [ "$LIST" -eq 1 ]; then
   printf '%scolours%s  (--color)\n\n' "$_b" "$_x"
   while IFS= read -r c; do printf '  %-16s %s\n' "$c" "$(color_note "$c")"; done < <(available_colors)
   printf '\n%sbackgrounds%s  (--background)\n\n  %-16s %s\n  %-16s %s\n' \
-    "$_b" "$_x" dark "black (default)" light "near-white; icons + outline go dark"
+    "$_b" "$_x" dark "black (default)" light "near-white; icons + selection arc go dark"
   trap - EXIT
   exit 0
 fi

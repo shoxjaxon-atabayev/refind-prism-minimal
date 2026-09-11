@@ -1,11 +1,15 @@
 # Prism Minimal
 
 A minimal [rEFInd](https://www.rodsbooks.com/refind/) boot theme. One solid
-background, silhouette icons, no labels. Pick a colour and the icons and
-selection outline turn that colour. The entry you're about to boot gets a
-thin outline: a square on the top row, a circle on the tools row. The five
-premium gradients (below) work the other way round — icons stay plain and
-the gradient lives in the selection: border, a soft fill, and a glow.
+background, silhouette icons, no labels — icons always stay pure white (dark
+ink on the light background), never tinted, and every one sits in its own
+faint glass card (rounded square, barely-visible border and interior, same
+shape on both rows, just smaller for the tools). Pick a colour and it lives
+only in the selection: the entry you're about to boot gets a full,
+always-solid orbital-arc ring on top of its card, whose outer glow pulses
+smoothly around the loop — two hotspots per turn — rather than sitting flat.
+The five premium gradients (below) sweep their hue around that same ring
+instead of a flat colour, for a refined prism/iridescent look.
 
 ![every colour, dark and light](preview.png)
 
@@ -97,8 +101,8 @@ Run `./install.sh --list` to see every colour and its note.
 ./install.sh --background dark
 ```
 
-`dark` is black (default), `light` is near-white (icons and outline turn dark
-so they stay readable).
+`dark` is black (default), `light` is near-white (icons and the selection arc
+turn dark so they stay readable).
 
 ## Combine them
 

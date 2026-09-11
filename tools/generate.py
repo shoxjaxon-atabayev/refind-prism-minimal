@@ -11,14 +11,20 @@ A "look" here is a **colour** x a **background**:
                  platinum — dark-background pieces
   * background — dark (black, default) or light (near-white)
 
-rEFInd can't tint just the focused icon, so the whole icon set is recoloured
-to the chosen hue (flat for SIMPLE, the same hue cycle for PREMIUM and
-GRADIENT alike); the selection is an *outline* (rounded square on the OS row,
-circle on the tool row) — no fill, no glow, except GRADIENT, which adds a
-low-opacity fill plus an outer glow riding the same hue on top of that
-outline, still inside the same ring geometry. On the light background flat/
-iridescent/gradient hues are all darkened for contrast, and white's icons go
-dark-on-white.
+Icons always render pure white on the dark background (dark ink on the
+light one) — never tinted — so every colour lives in the selection graphic
+alone. Every icon also bakes in a faint glass card: a barely-visible outline
+plus an even fainter interior wash (see CARD_BORDER_ALPHA / CARD_FILL_ALPHA),
+since rEFInd has no notion of an "unselected" graphic to draw it separately.
+Both rows use the same rounded-square card, just at different sizes. The one
+focused entry gets a full *orbital-arc ring* on top of its card instead: a
+continuous border, always at full strength, whose outer glow pulses smoothly
+around the loop — two hotspots per turn, brightest right where the colour
+cycle's two anchor hues land, easing down through the blended hues in
+between to a faint ambient halo, never fully off. SIMPLE colours pulse a
+single flat hue; PREMIUM and GRADIENT alike sweep their hue loop once around
+the ring for a refined prism/iridescent look. On the light background flat/
+iridescent/gradient hues are all darkened for contrast.
 
 Every icon is also re-padded to a fixed content size so the row has consistent,
 generous spacing regardless of how tightly each source icon was cropped.
@@ -99,9 +105,8 @@ PREMIUM_PHASE: dict[str, float] = {
 }
 
 # Premium gradients: a simple two-stop hue loop (start -> end -> back to
-# start), for the dark background specifically. Tints the icon set the same
-# way PREMIUM does, and on top of that render_outline() adds a low-opacity
-# fill tile plus an outer glow riding the same hue around the outline.
+# start). Painted only onto the orbital-arc selection graphic by
+# render_outline() — never onto the icon set, which stays pure white.
 GRADIENT: dict[str, list[str]] = {
     "aurora":     ["#00E676", "#00D4FF"],
     "solaris":    ["#FACC15", "#FB923C"],
@@ -129,14 +134,6 @@ BACKGROUNDS: dict[str, str] = {"dark": "#000000", "light": "#F4F4F5"}
 LIGHT_DARKEN_SIMPLE = 0.52   # flat hue x this on the light background
 LIGHT_DARKEN_PREMIUM = 0.58  # also used for GRADIENT — same treatment
 WHITE_ON_LIGHT = "#2B2B2D"   # the "white" variant's ink on the light background
-
-# GRADIENT-only selection extras: a translucent fill inside the ring and a
-# soft glow outside it, both painted with the same hue field as the border
-# stroke. Existing SIMPLE/PREMIUM variants never take this path — their
-# render_outline() output is byte-for-byte what it always was.
-GRADIENT_FILL_ALPHA = 0.14   # low-opacity tile behind the icon
-GRADIENT_GLOW_ALPHA = 0.35   # glow strength right at the ring's outer edge
-GRADIENT_GLOW_FALLOFF = 1.6  # >1 = fast-then-long fade, not a linear ramp
 
 # --------------------------------------------------------------- geometry --
 
@@ -176,22 +173,42 @@ FEATHER_SMALL = 0.5
 # The big outline canvas is 256*SCALE, the small one 64*SCALE; rEFInd scales
 # them down to big_icon_size / small_icon_size (200 / 50 in theme.conf) — so
 # `border` is a bit more than the thin on-screen stroke. `margin` keeps the
-# outline just outside the re-padded icon. All four measures scale with SCALE.
+# outline just outside the re-padded icon. `radius` is ~19% of each card's own
+# outer half-width (size/2 - margin) — a soft, generous "app icon" rounding,
+# not the tight corner a smaller radius reads as. Both rows use the same
+# rounded-square card language; only their size differs. All four measures
+# scale with SCALE.
 SPECS = {
     "big":   dict(px=256 * SCALE, shape="square",
-                  margin=34.0 * SCALE, radius=7.0 * SCALE, border=3.4 * SCALE),
-    "small": dict(px=64 * SCALE, shape="circle",
-                  margin=9.0 * SCALE, radius=0.0, border=2.3 * SCALE),
+                  margin=34.0 * SCALE, radius=18.0 * SCALE, border=3.4 * SCALE),
+    "small": dict(px=64 * SCALE, shape="square",
+                  margin=9.0 * SCALE, radius=4.5 * SCALE, border=2.3 * SCALE),
 }
 SS = 4  # supersample factor
 # Cap the outline supersample buffer: at SCALE 4 the square outline is 1024 px
 # and 1024*SS would be a 4096² float grid (OOM-prone on low-RAM boxes). A
-# rounded-rect stroke needs no more than ~2x SSAA at that size; the smaller
-# circle outline stays at the full factor.
+# rounded-rect stroke needs no more than ~2x SSAA at that size.
 MAX_OUTLINE_RES = 2048
 BORDER_ALPHA = 1.0
-RING_CYCLES_BIG = 2.0       # whole numbers only — seamless across the branch cut
-RING_CYCLES_SMALL = 1.0
+
+# The focused item's ring stroke is always at full, constant strength all the
+# way around — it must never fade to invisible anywhere. Only its GLOW pulses:
+# two hotspots per loop (ARC_PULSE_CYCLES=2), phase-locked (via CYCLE_PHASE) to
+# the hue loop's two anchor colours, easing down to a faint-but-present
+# ambient halo in between (see orbit_pulse(), below) — never fully off.
+ARC_PULSE_CYCLES = 2
+ARC_GLOW_MIN = 0.10       # the glow recedes to a faint ambient halo, never off
+ARC_GLOW_ALPHA = 0.60     # glow strength at each hotspot
+ARC_GLOW_FALLOFF = 1.3    # softer, wider spread than a tight halo
+
+# Every icon — focused or not — bakes in this faint glass-card look (rEFInd
+# only ever draws the vivid ring above behind the one focused entry, so this
+# is the only way every other icon still reads as a card): a barely-there
+# border plus an even fainter interior wash, both a neutral white on the dark
+# background / dark ink on the light one, same geometry as the vivid ring so
+# a focused icon's outline and glow trace exactly over it.
+CARD_BORDER_ALPHA = 0.12
+CARD_FILL_ALPHA = 0.05
 
 
 # ------------------------------------------------------------------ maths --
@@ -261,7 +278,11 @@ def paint(variant: str, bg: str):
 
 # ---------------------------------------------------------------- outline --
 
-def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
+def ring_geometry(kind: str):
+    """The rounded-square ring band (and its filled interior) for a SPECS
+    kind, at its own supersampled resolution — shared by the vivid focused
+    ring (render_outline) and the faint default card (render_card_border)
+    baked into every icon, so both always trace the exact same shape."""
     spec = SPECS[kind]
     size = spec["px"]
     ss = SS if size * SS <= MAX_OUTLINE_RES else MAX_OUTLINE_RES / size
@@ -269,43 +290,75 @@ def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
     ys, xs = np.mgrid[0:hi, 0:hi].astype(float)
     c = (hi - 1) / 2.0
     px, py = xs - c, ys - c
-
     outer = (size / 2.0 - spec["margin"]) * ss
     bw = spec["border"] * ss
     r = spec["radius"] * ss
     aa = 1.1 * ss
-
     d_out = shape_sdf(spec["shape"], px, py, outer, r)
     d_in = shape_sdf(spec["shape"], px, py, outer - bw, max(r - bw, 0.4 * ss))
-    ring = np.clip(smoothstep(aa, -aa, d_out) - smoothstep(aa, -aa, d_in), 0.0, 1.0)
+    fill = smoothstep(aa, -aa, d_out)  # 1 across the whole card footprint, 0 outside
+    ring = np.clip(fill - smoothstep(aa, -aa, d_in), 0.0, 1.0)
+    return spec, ring, fill, d_out, px, py, xs, ys, hi, size, ss
+
+
+def orbit_pulse(theta: np.ndarray, phase: float) -> np.ndarray:
+    """0..1, ARC_PULSE_CYCLES smooth peaks per full loop. `phase` is the same
+    offset paint()'s hue LUT indexing uses, so the peak always lands exactly
+    on theta = -phase — the loop's first anchor colour — easing down to its
+    floor at the diametrically opposite point."""
+    return 0.5 + 0.5 * np.cos(2.0 * np.pi * ARC_PULSE_CYCLES * (theta + phase))
+
+
+def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
+    spec, ring, _fill, d_out, px, py, xs, ys, hi, size, ss = ring_geometry(kind)
+
+    # Angular position around the shape, in turns. Nudged for the square so a
+    # constant step in theta tracks a roughly constant step in arc-length —
+    # otherwise the corners bunch the mapping (used below for both the hue
+    # sweep and the glow's orbit pulse, so the two stay in lockstep).
+    theta = np.arctan2(py, px) / (2.0 * np.pi) + 0.5
+    if spec["shape"] == "square":
+        theta = theta + 0.18 * ((xs / hi) * 0.58 + (ys / hi) * 0.42)
+    theta = np.mod(theta, 1.0)
+
+    phase = CYCLE_PHASE.get(variant, 0.0)
+    glow_env = ARC_GLOW_MIN + (1.0 - ARC_GLOW_MIN) * orbit_pulse(theta, phase)
 
     mode, col = paint(variant, bg)
     if mode == "grad":
         lut = col
-        cycles = RING_CYCLES_BIG if kind == "big" else RING_CYCLES_SMALL
-        theta = np.arctan2(py, px) / (2.0 * np.pi) + 0.5
-        if spec["shape"] == "square":  # even the hue out across the corners
-            theta = theta + 0.18 * ((xs / hi) * 0.58 + (ys / hi) * 0.42)
-        t = np.mod((theta + CYCLE_PHASE[variant]) * cycles, 1.0)
+        t = np.mod(theta + phase, 1.0)
         stroke_rgb = downscale(lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)], size)
     else:
         stroke_rgb = np.broadcast_to(col, (size, size, 3)).astype(float)
 
+    # The stroke itself is always full strength, all the way around — only
+    # its glow pulses (via `glow_env`), so the ring never reads as broken.
     alpha = downscale(ring, size) * BORDER_ALPHA
 
-    # GRADIENT-only extras: a low-opacity fill inside the ring and a soft glow
-    # outside it, both riding the same hue field as the stroke. SIMPLE/PREMIUM
-    # variants never touch this — their output is unchanged from before.
-    if variant in GRADIENT:
-        fill_mask = downscale(smoothstep(aa, -aa, d_in), size)
-        glow_span = max(spec["margin"] * ss, 1.0)
-        glow_raw = np.clip(1.0 - np.maximum(d_out, 0.0) / glow_span, 0.0, 1.0) ** GRADIENT_GLOW_FALLOFF
-        glow_mask = downscale(np.where(d_out > 0.0, glow_raw, 0.0), size)
-        alpha = np.clip(
-            alpha + fill_mask * GRADIENT_FILL_ALPHA + glow_mask * GRADIENT_GLOW_ALPHA,
-            0.0, 1.0)
+    glow_span = max(spec["margin"] * ss, 1.0)
+    glow_raw = np.clip(1.0 - np.maximum(d_out, 0.0) / glow_span, 0.0, 1.0) ** ARC_GLOW_FALLOFF
+    glow_mask = downscale(np.where(d_out > 0.0, glow_raw, 0.0) * glow_env, size)
+    alpha = np.clip(alpha + glow_mask * ARC_GLOW_ALPHA, 0.0, 1.0)
 
     rgba = np.clip(np.dstack([stroke_rgb, alpha]), 0.0, 1.0)
+    return Image.fromarray(
+        clear_transparent_rgb((rgba * 255.0 + 0.5).astype(np.uint8)), "RGBA")
+
+
+def render_card_border(kind: str, bg: str) -> Image.Image:
+    """The faint glass card baked into every icon (see CARD_BORDER_ALPHA /
+    CARD_FILL_ALPHA) — same shape as render_outline's vivid ring, just a
+    flat, low-alpha wash of the same white/dark-ink tone the icon glyphs
+    themselves use, with no colour cycling and no glow. `np.maximum` rather
+    than adding the two keeps the border the brighter rim it should be
+    instead of double-counting where it overlaps the fill."""
+    _spec, ring, fill, _d_out, _px, _py, _xs, _ys, _hi, size, _ss = ring_geometry(kind)
+    alpha = np.maximum(downscale(fill, size) * CARD_FILL_ALPHA,
+                        downscale(ring, size) * CARD_BORDER_ALPHA)
+    _, col = paint("white", bg)
+    rgb = np.broadcast_to(col, (size, size, 3)).astype(float)
+    rgba = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
     return Image.fromarray(
         clear_transparent_rgb((rgba * 255.0 + 0.5).astype(np.uint8)), "RGBA")
 
@@ -348,22 +401,17 @@ def pad_icon(img: Image.Image, out: int, sharpen: bool = True, feather: float = 
     return Image.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGBA")
 
 
-def recolor_icon(padded: Image.Image, variant: str, bg: str) -> Image.Image:
+def recolor_icon(padded: Image.Image, bg: str) -> Image.Image:
+    """Icons never carry the selected colour — pure white on the dark
+    background, dark ink on the light one, for every variant alike — so the
+    palette lives only in the orbital-arc selection graphic."""
     a = np.asarray(padded.convert("RGBA"), dtype=float) / 255.0
-    if variant == "white" and bg == "dark":  # keep as-is (bar the transparent-RGB clear)
+    if bg == "dark":
         return Image.fromarray(
             clear_transparent_rgb((a * 255.0 + 0.5).astype(np.uint8)), "RGBA")
     alpha = a[..., 3]
-    h, w = alpha.shape
-    mode, col = paint(variant, bg)
-    if mode == "grad":
-        lut = col
-        ys, xs = np.mgrid[0:h, 0:w].astype(float)
-        t = np.mod(((xs / max(w - 1, 1)) * 0.62 + (ys / max(h - 1, 1)) * 0.38)
-                   * 1.25 + CYCLE_PHASE[variant], 1.0)
-        rgb = lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)]
-    else:
-        rgb = np.broadcast_to(col, (h, w, 3))
+    _, ink = paint("white", bg)
+    rgb = np.broadcast_to(ink, alpha.shape + (3,))
     out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
     return Image.fromarray(
         clear_transparent_rgb((out * 255.0 + 0.5).astype(np.uint8)), "RGBA")
@@ -401,8 +449,16 @@ def build(variant: str) -> None:
         (d / "icons").mkdir(parents=True, exist_ok=True)
         render_outline("big", variant, bg).save(d / "selection_big.png", optimize=True)
         render_outline("small", variant, bg).save(d / "selection_small.png", optimize=True)
+        # render_card_border emits at SPECS[kind]["px"], same as the OS icon
+        # canvas (OUT_BIG) for "big" but not the tool icon canvas (OUT_SMALL
+        # is deliberately smaller, see FEATHER_SMALL above) — downscale to
+        # match before compositing onto the icon.
+        card = {"big": render_card_border("big", bg),
+                "small": render_card_border("small", bg).resize((OUT_SMALL, OUT_SMALL), Image.LANCZOS)}
         for name, pic in padded.items():
-            recolor_icon(pic, variant, bg).save(d / "icons" / name, optimize=True)
+            icon = recolor_icon(pic, bg)
+            icon = Image.alpha_composite(icon, card["big" if is_big_icon(name) else "small"])
+            icon.save(d / "icons" / name, optimize=True)
     print(f"  {variant:16s} -> {COLORS_DIR}/{variant}/  (+ light/)  {len(sources)} icons x2")
 
 
@@ -449,7 +505,7 @@ def make_preview(variants: list[str]) -> None:
 def make_menu_preview(variants: list[str]) -> None:
     os_names = [n for n in ("os_omarchy", "os_arch", "os_linux", "os_win11", "os_mac")
                 if (ICONS_DIR / f"{n}.png").exists()]
-    tool_names = [n for n in ("func_shutdown", "func_firmware", "func_about")
+    tool_names = [n for n in ("func_shutdown", "func_reset", "func_firmware", "func_about")
                   if (ICONS_DIR / f"{n}.png").exists()]
     if len(os_names) < 3:
         print("  (skipping menu preview: not enough icons)")

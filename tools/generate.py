@@ -103,9 +103,25 @@ ICON_CONTENT = 0.58
 SCALE = 4
 
 # OS icons emit at 256*SCALE (1024), downscaled to big_icon_size at boot.
-# Function/tool icons emit at a flat 128 — small_icon_size is 50 and rEFInd's
-# naive 2x2 bilinear downscaler takes 128 -> 50 far more cleanly than 512 -> 50.
-OUT_BIG, OUT_SMALL = 256 * SCALE, 128
+# Function/tool icons emit at 64, not 128: a controlled study against rEFInd's
+# actual egScaleImage() (libeg/image.c) -- a naive 2-tap bilinear with no
+# area/box filter, so it only ever blends the 4 source pixels straddling each
+# output sample -- found the max single-pixel alpha jump in the final 50px
+# render fell from ~250/255 at 128px down to ~165/255 at 64px. The smaller
+# master keeps the downscale ratio (64/50 = 1.28x) close to identity, so
+# egScaleImage's taps land inside the master's own AA ramp instead of
+# skipping across most of it. See FEATHER_SMALL below for the rest of the fix.
+OUT_BIG, OUT_SMALL = 256 * SCALE, 64
+
+# Small (func_/tool_) icons get a touch of alpha-only Gaussian feather after
+# padding, widening their AA ramp before egScaleImage sees it -- this narrows
+# the max single-step alpha jump in the final 50px render further without
+# softening the icon's white interior (only edge pixels have any alpha
+# gradient to blur). Tuned against a reference theme's shipped 64px icon run
+# through the same egScaleImage math: 0.5px lands at reference-level edge
+# smoothness (comparable max-jump and transition-pixel counts) while keeping
+# the silhouette crisp, not blurry.
+FEATHER_SMALL = 0.5
 
 # The big outline canvas is 256*SCALE, the small one 64*SCALE; rEFInd scales
 # them down to big_icon_size / small_icon_size (200 / 50 in theme.conf) — so
@@ -232,14 +248,17 @@ def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
 
 # ------------------------------------------------------------------ icons --
 
-def pad_icon(img: Image.Image, out: int, sharpen: bool = True) -> Image.Image:
+def pad_icon(img: Image.Image, out: int, sharpen: bool = True, feather: float = 0.0) -> Image.Image:
     """Re-centre an icon's content to ICON_CONTENT of an `out`-px canvas. When
     `sharpen`, also crisp the edges: a light unsharp mask undoes interpolation
     softness and a steep contrast curve on the alpha pulls the anti-aliased
     border back to a tight ~1 px — so it still reads clean after rEFInd's own
-    downscale. Function/tool icons render at a flat 128px with `sharpen`
-    off: that post-processing was tuned for the big OS icons' 1024->200
-    downscale and just adds ringing ahead of the small icons' 128->50 one."""
+    downscale. Function/tool icons render at a flat 64px with `sharpen` off:
+    that post-processing was tuned for the big OS icons' 1024->200 downscale
+    and just adds ringing ahead of the small icons' 64->50 one. `feather`
+    (small icons only) is a Gaussian blur applied to the alpha channel alone
+    after compositing — it widens the AA ramp for egScaleImage's naive 2-tap
+    bilinear without touching the interior's flat 255 alpha."""
     im = img.convert("RGBA")
     a = np.asarray(im)
     ys, xs = np.where(a[..., 3] > 8)
@@ -252,6 +271,10 @@ def pad_icon(img: Image.Image, out: int, sharpen: bool = True) -> Image.Image:
     canvas = Image.new("RGBA", (out, out), (0, 0, 0, 0))
     canvas.alpha_composite(content, ((out - nw) // 2, (out - nh) // 2))
     if not sharpen:
+        if feather > 0:
+            r, g, b, alpha_ch = canvas.split()
+            alpha_ch = alpha_ch.filter(ImageFilter.GaussianBlur(feather))
+            canvas = Image.merge("RGBA", (r, g, b, alpha_ch))
         return canvas
 
     canvas = canvas.filter(ImageFilter.UnsharpMask(radius=1.4, percent=90, threshold=0))
@@ -306,7 +329,8 @@ def is_big_icon(name: str) -> bool:
 def build(variant: str) -> None:
     sources = sorted(ICONS_DIR.glob("*.png"))
     padded = {f.name: pad_icon(Image.open(f), OUT_BIG if is_big_icon(f.name) else OUT_SMALL,
-                                sharpen=is_big_icon(f.name))
+                                sharpen=is_big_icon(f.name),
+                                feather=0.0 if is_big_icon(f.name) else FEATHER_SMALL)
               for f in sources}
     for bg in ("dark", "light"):
         d = look_dir(variant, bg)

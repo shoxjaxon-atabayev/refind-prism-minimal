@@ -8,17 +8,17 @@ A "look" here is a **colour** x a **background**:
                  + premium iridescent obsidian-purple / titanium-silver /
                  champagne-gold
                  + premium gradient aurora / solaris / forest / rose-gold /
-                 cyberpunk / platinum — dark-background pieces where the
-                 gradient lives in the selection only; the icon stays plain
+                 cyberpunk / platinum — dark-background pieces
   * background — dark (black, default) or light (near-white)
 
-rEFInd can't tint just the focused icon, so for SIMPLE/PREMIUM the whole icon
-set is recoloured to the chosen hue; the selection is an *outline* (rounded
-square on the OS row, circle on the tool row) — no fill, no glow. GRADIENT
-variants invert that: the icon stays plain white/ink and the outline gets a
-low-opacity fill plus an outer glow riding the same hue, still inside the
-same ring geometry. On the light background flat/iridescent/gradient hues are
-all darkened for contrast, and plain icons go dark-on-white.
+rEFInd can't tint just the focused icon, so the whole icon set is recoloured
+to the chosen hue (flat for SIMPLE, the same hue cycle for PREMIUM and
+GRADIENT alike); the selection is an *outline* (rounded square on the OS row,
+circle on the tool row) — no fill, no glow, except GRADIENT, which adds a
+low-opacity fill plus an outer glow riding the same hue on top of that
+outline, still inside the same ring geometry. On the light background flat/
+iridescent/gradient hues are all darkened for contrast, and white's icons go
+dark-on-white.
 
 Every icon is also re-padded to a fixed content size so the row has consistent,
 generous spacing regardless of how tightly each source icon was cropped.
@@ -99,10 +99,9 @@ PREMIUM_PHASE: dict[str, float] = {
 }
 
 # Premium gradients: a simple two-stop hue loop (start -> end -> back to
-# start), for the dark background specifically. Unlike PREMIUM above, these
-# don't tint the icon — recolor_icon() keeps the icon plain white/ink, same
-# as the "white" variant — the gradient lives only in the selection: border,
-# a low-opacity fill tile, and an outer glow (see render_outline()).
+# start), for the dark background specifically. Tints the icon set the same
+# way PREMIUM does, and on top of that render_outline() adds a low-opacity
+# fill tile plus an outer glow riding the same hue around the outline.
 GRADIENT: dict[str, list[str]] = {
     "aurora":     ["#00E676", "#00D4FF"],
     "solaris":    ["#FACC15", "#FB923C"],
@@ -353,19 +352,11 @@ def pad_icon(img: Image.Image, out: int, sharpen: bool = True, feather: float = 
 
 def recolor_icon(padded: Image.Image, variant: str, bg: str) -> Image.Image:
     a = np.asarray(padded.convert("RGBA"), dtype=float) / 255.0
-    # GRADIENT variants colour only the selection (border/fill/glow) — the
-    # icon itself stays plain, exactly like "white": untouched on dark ink
-    # on light, so it's still visible against the near-white background.
-    if (variant == "white" and bg == "dark") or (variant in GRADIENT and bg == "dark"):
+    if variant == "white" and bg == "dark":  # keep as-is (bar the transparent-RGB clear)
         return Image.fromarray(
             clear_transparent_rgb((a * 255.0 + 0.5).astype(np.uint8)), "RGBA")
     alpha = a[..., 3]
     h, w = alpha.shape
-    if variant in GRADIENT:  # bg == "light" here (dark handled above)
-        rgb = np.broadcast_to(hex_rgb(WHITE_ON_LIGHT), (h, w, 3))
-        out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
-        return Image.fromarray(
-            clear_transparent_rgb((out * 255.0 + 0.5).astype(np.uint8)), "RGBA")
     mode, col = paint(variant, bg)
     if mode == "grad":
         lut = col

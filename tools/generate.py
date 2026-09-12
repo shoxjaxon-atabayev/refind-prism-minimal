@@ -11,9 +11,12 @@ A "look" here is a **colour** x a **background**:
   * background — dark (black, default) or light (near-white)
 
 Icons render white on the dark background (dark ink on the light one),
-lightly tinted toward the variant's own colour (ICON_TINT_MIX) so they read
-as the same palette as the selection graphic without becoming a fully
-coloured icon. Every icon also bakes in a faint glass card: a barely-visible outline
+tinted toward the variant's own colour (ICON_TINT_MIX_SIMPLE / _PREMIUM) so
+they read as the same palette as the selection graphic without becoming a
+fully coloured icon. PREMIUM/GRADIENT get a much stronger tint than SIMPLE —
+the selection ring already sells "premium" through full-saturation stroke +
+hot core + halo + bloom, and a SIMPLE-strength wash on the icon next to that
+just read as a plain pale colour, not the same finish. Every icon also bakes in a faint glass card: a barely-visible outline
 plus an even fainter interior wash (see CARD_BORDER_ALPHA / CARD_FILL_ALPHA),
 since rEFInd has no notion of an "unselected" graphic to draw it separately.
 The OS row's card is a rounded square, the func_/tool_ row's a circle (see
@@ -124,7 +127,7 @@ GRADIENT: dict[str, list[str]] = {
     # Blue-violet steel (hue ~232°, the gap between flat blue at 213° and
     # obsidian-purple's own range starting ~253°), more saturated than a
     # real "grey" ever would be (S 42-48%) so it still reads as coloured
-    # after ICON_TINT_MIX's 78% dilution toward white.
+    # after ICON_TINT_MIX_PREMIUM's dilution toward white.
     "platinum":   ["#3C4AAA", "#A1A8D9"],
 }
 
@@ -188,11 +191,41 @@ FEATHER_SMALL = 0.5
 # outer half-width (size/2 - margin) — a soft, generous "app icon" rounding,
 # not the tight corner a smaller radius reads as (unused for "small", a
 # circle — see shape_sdf). All four measures scale with SCALE.
+#
+# rEFInd does NOT draw the selection backdrop at the icon's own size: it's
+# scaled to (icon_size * 9/8) for the big row and (icon_size * 4/3) for the
+# small one — refind/menu.c: `TileSizes[0] = IconSizes[BIG]*9/8;
+# TileSizes[1] = IconSizes[SMALL]*4/3;`, `SelectionImages[i] =
+# egScaleImage(..., TileSizes[i], TileSizes[i])` — both the icon and the
+# backdrop then centred on the same point (libeg's BltImageCompositeBadge:
+# `OffsetX = (TotalWidth - CompWidth) >> 1`). The margin/radius/border below
+# were tuned by eye as if backdrop and icon rendered at the same size — which
+# is what this file's own preview wrongly assumed too (see TILE_RATIO's use
+# in make_menu_preview), so it looked right there. On real hardware the
+# backdrop is 12.5%/33% bigger than the icon it sits behind, so the card
+# visibly floats outside the icon instead of hugging it. shrink_spec()
+# pre-shrinks the card shape toward the canvas centre by 1/ratio so rEFInd's
+# own re-inflation lands it back where it was actually designed.
+TILE_RATIO = {"big": 9 / 8, "small": 4 / 3}
+
+
+def shrink_spec(px: float, margin: float, radius: float, border: float, ratio: float) -> dict:
+    """Scale a card shape toward the canvas centre by 1/ratio. `margin` is
+    size/2 minus the shape's own outer half-width, not a length measured from
+    the centre, so it has to be solved back out from the shrunk outer rather
+    than scaled directly; `radius` and `border` are plain lengths and scale
+    straight through."""
+    outer = px / 2.0 - margin
+    return dict(margin=px / 2.0 - outer / ratio, radius=radius / ratio, border=border / ratio)
+
+
 SPECS = {
     "big":   dict(px=256 * SCALE, shape="square",
-                  margin=34.0 * SCALE, radius=18.0 * SCALE, border=3.4 * SCALE),
+                  **shrink_spec(256 * SCALE, 34.0 * SCALE, 18.0 * SCALE, 3.4 * SCALE,
+                                 TILE_RATIO["big"])),
     "small": dict(px=64 * SCALE, shape="circle",
-                  margin=9.0 * SCALE, radius=4.5 * SCALE, border=2.3 * SCALE),
+                  **shrink_spec(64 * SCALE, 9.0 * SCALE, 4.5 * SCALE, 2.3 * SCALE,
+                                 TILE_RATIO["small"])),
 }
 SS = 4  # supersample factor
 # Cap the outline supersample buffer: at SCALE 4 the square outline is 1024 px
@@ -212,12 +245,40 @@ ORBIT_WIDTH_MULT = 1.5       # lit-corner stroke width, x the card border's own 
                               # — a bit more prominent than the card's own hairline,
                               # but still the same perimeter, not a new ribbon
 # Both fractions are of `outer`, the card's own half-width at its flat edges
-# (see ring_geometry) -- so they scale automatically between "big" and
-# "small". The two OTHER (dead) corners sit a full straight-edge-length away,
-# so ORBIT_HALF_WIDTH_FRAC must stay well under ~1.0 or a lit corner's
-# falloff reaches all the way into its neighbours, leaving no dead zone.
-ORBIT_PLATEAU_FRAC = 0.10    # stays at full strength this close to the corner
-ORBIT_HALF_WIDTH_FRAC = 0.62  # smoothstep falloff to 0 from there
+# (see ring_geometry). bump = max(bump_tl, bump_br) stays fully dark at a
+# boundary point only while BOTH dist_tl and dist_br there are >= half_width
+# -- i.e. the true ceiling is set by min(dist_tl, dist_br)'s own maximum over
+# the whole boundary (reached at the two OTHER, unlit corners, where both
+# distances are roughly a full edge-length), NOT by "half an edge away" --
+# an earlier version of this comment got that wrong by ~2x and capped both
+# shapes far more conservatively than the geometry actually allows. Measured
+# numerically straight off ring_geometry's own boundary (see scratch check,
+# 2026-09-13): ceiling frac is ~1.568 x outer for the rounded-square "big"
+# card and ~1.414 x outer (== sqrt(2), the chord length between the two
+# antipodal lit points at 90°) for the circular "small" one -- "small" isn't
+# actually the one with more headroom, they're close; "big" has slightly
+# more. Both get 80% of their own ceiling here, which leaves ~20% of the
+# full perimeter genuinely dark (never a continuous ring) while making the
+# lit majority the dominant read -- clearly past the midpoint of each edge,
+# per the reference image the user pointed at ("currently reaches half a
+# side; each one should be MORE than half"). Plateau is always HALF of its
+# own half-width (not a sliver at the tip), so the lit stretch reads as a
+# real block of solid colour that then fades, rather than a fade with a
+# bright pinpoint.
+#
+# IMPORTANT: `outer` itself is already the POST-shrink_spec value (see
+# SPECS/TILE_RATIO above) — these fractions apply to the smaller, hardware-
+# correct card, not the original design size, so a frac increase here does
+# NOT translate 1:1 into a longer arc measured against how an *old* build
+# looked (outer itself moves too whenever SPECS changes) -- always recompute
+# `half_width_frac * outer` in canvas px and compare that number, not the
+# frac alone. Judge the actual result from make_menu_preview's output (it
+# simulates rEFInd's real TILE_RATIO re-inflation) or an actual installed
+# icon, never from make_preview's swatch grid or the raw selection_*.png
+# files directly — neither undoes the shrink, so both always show the
+# card+glow smaller/tighter than they'll actually render.
+ORBIT_PLATEAU_FRAC = {"big": 0.627, "small": 0.566}      # 50% of the half-width below
+ORBIT_HALF_WIDTH_FRAC = {"big": 1.255, "small": 1.131}   # 80% of each shape's own ceiling
 ORBIT_CORE_ALPHA = 0.95      # crisp core, peak strength at each corner's centre
 ORBIT_CORE_WHITE_MIX = 0.50  # blend toward white at the peak, for a hot core
 ORBIT_HALO_BLUR = 1.6        # x card border width, capped by the card's own margin
@@ -245,14 +306,25 @@ SIMPLE_BLOOM_ALPHA = 0.0     # no outer bloom
 CARD_BORDER_ALPHA = 0.12
 CARD_FILL_ALPHA = 0.05
 
-# Every icon in a variant also picks up a light tint of that variant's own
-# colour (see icon_tint / recolor_icon) — a mix, not a full recolour, so it
-# still plainly reads as a white icon with a colour cast rather than a
-# coloured icon. rEFInd keeps one fixed icon file per OS regardless of which
-# entry is currently focused (there is no separate "unfocused" icon asset to
-# swap to), so this applies to every icon in the variant alike, not only
-# whichever one happens to be selected at any moment.
-ICON_TINT_MIX = 0.22
+# Every icon in a variant also picks up a tint of that variant's own colour
+# (see icon_tint / recolor_icon) — a mix, not a full recolour, so it still
+# plainly reads as a white icon with a colour cast rather than a coloured
+# icon. rEFInd keeps one fixed icon file per OS regardless of which entry is
+# currently focused (there is no separate "unfocused" icon asset to swap to),
+# so this applies to every icon in the variant alike, not only whichever one
+# happens to be selected at any moment.
+#
+# SIMPLE gets a modest mix — just enough to read as "a bit of colour," since
+# a flat hue has no extra finish to sell. PREMIUM/GRADIENT get a much
+# stronger one: their selection ring already reads as unmistakably premium
+# (full-saturation stroke, hot white core, halo, bloom, a different hue per
+# icon via icon_tint's `name` phase), and at SIMPLE-strength dilution that
+# same colour collapsed to a near-white smudge on the icon itself — no
+# iridescence left to see. The higher mix keeps that per-icon hue clearly
+# legible while `base` still carries most of the icon's own value, so it
+# still reads as a white/dark-ink glyph, just an obviously tinted one.
+ICON_TINT_MIX_SIMPLE = 0.34
+ICON_TINT_MIX_PREMIUM = 0.60   # also used for GRADIENT
 
 
 # ------------------------------------------------------------------ maths --
@@ -346,9 +418,9 @@ def ring_geometry(kind: str):
     return spec, ring, fill, d_out, px, py, xs, ys, hi, size, ss
 
 
-def corner_bump(dist_from_corner: np.ndarray, outer: float) -> np.ndarray:
+def corner_bump(dist_from_corner: np.ndarray, outer: float, kind: str) -> np.ndarray:
     """1.0 right at the lit point, then smoothstepping down to a hard 0 by
-    ORBIT_HALF_WIDTH_FRAC x outer moving away from it — a real dead zone,
+    ORBIT_HALF_WIDTH_FRAC[kind] x outer moving away from it — a real dead zone,
     unlike a raised cosine which never actually reaches zero over a stretch.
     For the rounded-square "big" card, `dist_from_corner` is Euclidean
     distance to the corner arc's own centre, minus its radius, so it already
@@ -363,7 +435,8 @@ def corner_bump(dist_from_corner: np.ndarray, outer: float) -> np.ndarray:
     position-dependent "nudge" (matching neither angle nor arc-length) only
     ever had to look fine averaged over a fully lit loop -- it badly
     distorts where a real dead zone falls."""
-    plateau, half_width = ORBIT_PLATEAU_FRAC * outer, ORBIT_HALF_WIDTH_FRAC * outer
+    plateau = ORBIT_PLATEAU_FRAC[kind] * outer
+    half_width = ORBIT_HALF_WIDTH_FRAC[kind] * outer
     return 1.0 - smoothstep(plateau, half_width, dist_from_corner)
 
 
@@ -400,7 +473,7 @@ def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
         c = outer - r
         dist_tl = np.maximum(np.hypot(px + c, py + c) - r, 0.0)
         dist_br = np.maximum(np.hypot(px - c, py - c) - r, 0.0)
-    bump_tl, bump_br = corner_bump(dist_tl, outer), corner_bump(dist_br, outer)
+    bump_tl, bump_br = corner_bump(dist_tl, outer, kind), corner_bump(dist_br, outer, kind)
     bump = np.maximum(bump_tl, bump_br)
 
     # A thin, anti-aliased band straddling the card's own perimeter contour
@@ -568,15 +641,18 @@ def icon_tint(variant: str, bg: str, name: str | None = None) -> np.ndarray:
 def recolor_icon(padded: Image.Image, variant: str, bg: str, name: str | None = None) -> Image.Image:
     """White on the dark background, dark ink on the light one, same as
     every variant — but blended toward that variant's own colour
-    (ICON_TINT_MIX) rather than staying neutral, so the icon and the
-    selection graphic read as the same palette. `name` (see icon_tint) is
-    what lets each PREMIUM/GRADIENT big icon pick its own facet of the
-    variant's hue loop instead of sharing one flat average."""
+    (ICON_TINT_MIX_SIMPLE / _PREMIUM) rather than staying neutral, so the
+    icon and the selection graphic read as the same palette, and PREMIUM/
+    GRADIENT icons carry the same obviously-not-flat finish their ring does.
+    `name` (see icon_tint) is what lets each PREMIUM/GRADIENT big icon pick
+    its own facet of the variant's hue loop instead of sharing one flat
+    average."""
     a = np.asarray(padded.convert("RGBA"), dtype=float) / 255.0
     alpha = a[..., 3]
     _, base = paint("white", bg)
     tint = icon_tint(variant, bg, name)
-    rgb = np.broadcast_to(base * (1.0 - ICON_TINT_MIX) + tint * ICON_TINT_MIX, alpha.shape + (3,))
+    mix = ICON_TINT_MIX_SIMPLE if variant in SIMPLE else ICON_TINT_MIX_PREMIUM
+    rgb = np.broadcast_to(base * (1.0 - mix) + tint * mix, alpha.shape + (3,))
     out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
     return Image.fromarray(
         clear_transparent_rgb((out * 255.0 + 0.5).astype(np.uint8)), "RGBA")
@@ -642,6 +718,14 @@ def _cell(bg_hex: str, size: int, *layers: Image.Image) -> Image.Image:
 
 
 def make_preview(variants: list[str]) -> None:
+    """A quick hue/palette comparison sheet — NOT a hardware-accurate
+    simulation. It draws the selection image and the icon at the same size,
+    which is wrong twice over: real rEFInd draws the selection backdrop
+    bigger than the icon (see TILE_RATIO), and SPECS is pre-shrunk to
+    compensate for that on real hardware. So the card/glow always looks
+    smaller and tighter here than it actually renders — use
+    make_menu_preview()'s output (or an actual install) to judge card size
+    or glow length; this one's only for comparing hues at a glance."""
     if not (ICONS_DIR / "os_arch.png").exists():
         print("  (skipping preview: no icons)")
         return
@@ -692,6 +776,13 @@ def make_menu_preview(variants: list[str]) -> None:
 
     W, strip_h = 1280, 250
     big, small = 100, 25         # ~theme.conf 200/50 at 0.5 px per rEFInd px
+    # rEFInd draws the selection backdrop BIGGER than the icon it sits behind
+    # (TILE_RATIO — see SPECS above) and centres both on the same point.
+    # Mirror that here instead of drawing both at the same size: that's the
+    # earlier bug that made this preview look right while the real boot menu
+    # showed the border floating outside the card.
+    sel_big = round(big * TILE_RATIO["big"])
+    sel_small = round(small * TILE_RATIO["small"])
     gap_big, gap_small = 16, 12  # rEFInd's own cell gap is small; the spacing
     sel_os, sel_tool = 1, 0      # you see comes from the icons' transparent pad
     combos = [(v, bg) for bg in ("dark", "light") for v in variants]
@@ -702,18 +793,27 @@ def make_menu_preview(variants: list[str]) -> None:
         # mimic that so the preview shows the real on-screen sharpness.
         return img.resize((refind_px, refind_px), Image.BILINEAR).resize((draw_px, draw_px), Image.LANCZOS)
 
+    def centered(x: int, y: int, ref_size: int, draw_size: int) -> tuple[int, int]:
+        """Top-left for a draw_size box sharing a centre with a ref_size box
+        whose own top-left is (x, y) — how rEFInd centres the (smaller) icon
+        inside the (bigger) selection backdrop's tile box."""
+        off = (draw_size - ref_size) // 2
+        return x - off, y - off
+
     for row, (v, bg) in enumerate(combos):
         rgb = tuple(int(round(c * 255)) for c in hex_rgb(BACKGROUNDS[bg]))
         strip = Image.new("RGBA", (W, strip_h), rgb + (255,))
-        sel_b = as_refind(Image.open(look_dir(v, bg) / "selection_big.png").convert("RGBA"), 200, big)
-        sel_s = as_refind(Image.open(look_dir(v, bg) / "selection_small.png").convert("RGBA"), 50, small)
+        sel_b = as_refind(Image.open(look_dir(v, bg) / "selection_big.png").convert("RGBA"),
+                           (200 * 9) // 8, sel_big)
+        sel_s = as_refind(Image.open(look_dir(v, bg) / "selection_small.png").convert("RGBA"),
+                           (50 * 4) // 3, sel_small)
 
         x0 = (W - (len(os_names) * big + (len(os_names) - 1) * gap_big)) // 2
         y_os = 64
         for i, n in enumerate(os_names):
             x = x0 + i * (big + gap_big)
             if i == sel_os:
-                strip.alpha_composite(sel_b, (x, y_os))
+                strip.alpha_composite(sel_b, centered(x, y_os, big, sel_big))
             strip.alpha_composite(as_refind(look_icon(v, bg, f"{n}.png"), 200, big), (x, y_os))
 
         tx0 = (W - (len(tool_names) * small + (len(tool_names) - 1) * gap_small)) // 2
@@ -721,7 +821,7 @@ def make_menu_preview(variants: list[str]) -> None:
         for i, n in enumerate(tool_names):
             x = tx0 + i * (small + gap_small)
             if i == sel_tool:
-                strip.alpha_composite(sel_s, (x, y_tool))
+                strip.alpha_composite(sel_s, centered(x, y_tool, small, sel_small))
             strip.alpha_composite(as_refind(look_icon(v, bg, f"{n}.png"), 50, small), (x, y_tool))
 
         panel.paste(strip.convert("RGB"), (0, row * strip_h))

@@ -4,11 +4,10 @@ Regenerate every colour / background asset for the Prism Minimal rEFInd theme.
 
 A "look" here is a **colour** x a **background**:
 
-  * colour     — white (default) + green red violet pink gray blue
-                 + premium iridescent obsidian-purple / titanium-silver /
-                 champagne-gold
-                 + premium gradient aurora / solaris / rose-gold / cyberpunk /
-                 platinum — dark-background pieces
+  * colour     — white (default) + green red pink blue
+                 + premium iridescent obsidian-purple / champagne-gold
+                 + premium gradient aurora / cyberpunk / platinum
+                 — dark-background pieces
   * background — dark (black, default) or light (near-white)
 
 Icons render white on the dark background (dark ink on the light one),
@@ -17,17 +16,16 @@ as the same palette as the selection graphic without becoming a fully
 coloured icon. Every icon also bakes in a faint glass card: a barely-visible outline
 plus an even fainter interior wash (see CARD_BORDER_ALPHA / CARD_FILL_ALPHA),
 since rEFInd has no notion of an "unselected" graphic to draw it separately.
-Both rows use the same rounded-square card, just at different sizes. The one
-focused entry also gets a *partial light* traced on that exact same card
-perimeter (ring_geometry — same straight edges and rounded corners, never a
-circle or oval of its own). Only two opposite corners ever light up — fixed
-at the upper-left and lower-right, each a smoothstep bump in true distance
-along the card's own edges (corner_bump) that reaches partway down its two
-adjoining sides and fades to fully transparent well before the far corners,
-never a continuous ring. render_card_border already bakes a complete faint
-neutral border into every icon (composited on top of this at the same
+The OS row's card is a rounded square, the func_/tool_ row's a circle (see
+SPECS) — otherwise identical treatment. The one focused entry also gets a
+*partial light* traced on that exact same card perimeter (ring_geometry).
+Only two opposite points ever light up — fixed at the upper-left and
+lower-right, each a smoothstep bump in true distance along the card's own
+edge (corner_bump) that fades to fully transparent well before the far
+side, never a continuous ring. render_card_border already bakes a complete
+faint neutral border into every icon (composited on top of this at the same
 geometry), so this image adds only the coloured light — nothing in the dead
-zones. Each lit corner
+zones. Each lit point
 layers a crisp hued core (blended toward white at its peak, for a "hot"
 look), a softer wider halo, and a very restrained outer bloom — the halo/
 bloom are just a Gaussian blur of the core's alpha, scaled down and capped
@@ -79,7 +77,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 REPO = Path(__file__).resolve().parent.parent
 COLORS_DIR = REPO / "build" / "colors"   # default; override with --out-dir=PATH
@@ -92,27 +90,28 @@ SIMPLE: dict[str, str] = {
     "white":  "#FFFFFF",
     "green":  "#40DC77",
     "red":    "#FF4D4D",
-    "violet": "#8B5CF6",
     "pink":   "#FF74C4",
-    "gray":   "#AAB2C0",
     "blue":   "#4D9DFF",
 }
 
 # Premium variants: an ordered loop of hue stops the colour cycles through
 # (the list wraps). Weighted toward the name hue so it still reads as
-# purple / silver / gold, with off-hues for the oil-slick shimmer.
+# purple / gold, with off-hues for the oil-slick shimmer.
 PREMIUM: dict[str, list[str]] = {
-    "obsidian-purple": ["#7A28D8", "#A838E8", "#D060E8", "#9A6CF6",
-                        "#4E78F0", "#30C6D2", "#6E2CD0"],
-    "titanium-silver": ["#9AA4B4", "#C4CEDC", "#EAF0F8", "#FCFEFF",
-                        "#AEDCF2", "#DCC8F2", "#EEDCAC"],
-    "champagne-gold":  ["#D0A24E", "#E6BE72", "#F4D68E", "#FFF2D2",
-                        "#FFDCC6", "#F4B4C8", "#CCE8CC"],
+    # Deep, dark jewel purple/indigo/magenta only (hue ~253-296°, L 22-46%)
+    # -- pulled well below the old loop's own lighter, blue-leaning stop
+    # (#4E78F0, hue ~221°, nearly flat blue), so it doesn't read as "a
+    # lighter/darker version of an existing flat colour."
+    "obsidian-purple": ["#4C0F8C", "#7A1FA8", "#9D2BB8", "#5E1499",
+                        "#2D1466", "#8B2FA0", "#3D1470"],
+    # Pure gold/bronze only (hue ~40-45°) -- the old loop's pink and green
+    # stops (which pulled it toward other territory) are gone.
+    "champagne-gold":  ["#8B6508", "#B8860B", "#D4A82E", "#E8C468",
+                        "#C9962E", "#F0DCA0", "#A67C1E"],
 }
 
 PREMIUM_PHASE: dict[str, float] = {
     "obsidian-purple": 0.00,
-    "titanium-silver": 0.37,
     "champagne-gold":  0.68,
 }
 
@@ -121,16 +120,16 @@ PREMIUM_PHASE: dict[str, float] = {
 # also draws on these same stops for the icon set's own light colour cast.
 GRADIENT: dict[str, list[str]] = {
     "aurora":     ["#00E676", "#00D4FF"],
-    "solaris":    ["#FACC15", "#FB923C"],
-    "rose-gold":  ["#F472B6", "#FDE68A"],
     "cyberpunk":  ["#FF0080", "#00E5FF"],
-    "platinum":   ["#9CA3AF", "#F3F4F6"],
+    # Blue-violet steel (hue ~232°, the gap between flat blue at 213° and
+    # obsidian-purple's own range starting ~253°), more saturated than a
+    # real "grey" ever would be (S 42-48%) so it still reads as coloured
+    # after ICON_TINT_MIX's 78% dilution toward white.
+    "platinum":   ["#3C4AAA", "#A1A8D9"],
 }
 
 GRADIENT_PHASE: dict[str, float] = {
     "aurora":    0.00,
-    "solaris":   0.20,
-    "rose-gold": 0.40,
     "cyberpunk": 0.60,
     "platinum":  0.80,
 }
@@ -187,13 +186,12 @@ FEATHER_SMALL = 0.5
 # `border` is a bit more than the thin on-screen stroke. `margin` keeps the
 # outline just outside the re-padded icon. `radius` is ~19% of each card's own
 # outer half-width (size/2 - margin) — a soft, generous "app icon" rounding,
-# not the tight corner a smaller radius reads as. Both rows use the same
-# rounded-square card language; only their size differs. All four measures
-# scale with SCALE.
+# not the tight corner a smaller radius reads as (unused for "small", a
+# circle — see shape_sdf). All four measures scale with SCALE.
 SPECS = {
     "big":   dict(px=256 * SCALE, shape="square",
                   margin=34.0 * SCALE, radius=18.0 * SCALE, border=3.4 * SCALE),
-    "small": dict(px=64 * SCALE, shape="square",
+    "small": dict(px=64 * SCALE, shape="circle",
                   margin=9.0 * SCALE, radius=4.5 * SCALE, border=2.3 * SCALE),
 }
 SS = 4  # supersample factor
@@ -202,10 +200,10 @@ SS = 4  # supersample factor
 # rounded-rect stroke needs no more than ~2x SSAA at that size.
 MAX_OUTLINE_RES = 2048
 # The focused item's light is NOT a continuous ring: it traces the SAME
-# rounded-square perimeter as the card (ring_geometry) — never a circle or
-# oval of its own — and only two opposite corners of it ever light up, fixed
-# at the upper-left / lower-right. Each fades smoothly to a hard, genuine 0
-# well before reaching the far corners (corner_bump) — unlike a raised
+# perimeter as the card itself (ring_geometry — rounded square for "big",
+# circle for "small") and only two opposite points of it ever light up,
+# fixed at the upper-left / lower-right. Each fades smoothly to a hard,
+# genuine 0 well before reaching the far side (corner_bump) — unlike a raised
 # cosine, which is never actually zero over a stretch. There is no separate
 # neutral base layer here: render_card_border already bakes the complete faint card
 # border into every icon (composited on top of this, same geometry), so the
@@ -226,6 +224,17 @@ ORBIT_HALO_BLUR = 1.6        # x card border width, capped by the card's own mar
 ORBIT_HALO_ALPHA = 0.70
 ORBIT_BLOOM_BLUR = 4.0       # x card border width, capped by the card's own margin
 ORBIT_BLOOM_ALPHA = 0.42
+
+# SIMPLE colours are the plain, no-frills tier — their focused light should
+# read as a clean, minimal accent, not compete with PREMIUM/GRADIENT's
+# iridescent glow (see render_outline). Same corner geometry, same width —
+# only the "hot" white blend and the halo/bloom glow are dropped, so the two
+# tiers are told apart by finish (flat colour vs glowing shimmer), not by a
+# different shape.
+SIMPLE_CORE_ALPHA = 0.85     # a touch calmer than ORBIT_CORE_ALPHA
+SIMPLE_CORE_WHITE_MIX = 0.0  # pure flat hue at the corner, no hot highlight
+SIMPLE_HALO_ALPHA = 0.0      # no soft glow
+SIMPLE_BLOOM_ALPHA = 0.0     # no outer bloom
 
 # Every icon — focused or not — bakes in this faint glass-card look (rEFInd
 # only ever draws the vivid ring above behind the one focused entry, so this
@@ -314,10 +323,11 @@ def paint(variant: str, bg: str):
 # ---------------------------------------------------------------- outline --
 
 def ring_geometry(kind: str):
-    """The rounded-square ring band (and its filled interior) for a SPECS
-    kind, at its own supersampled resolution — shared by the vivid focused
-    ring (render_outline) and the faint default card (render_card_border)
-    baked into every icon, so both always trace the exact same shape."""
+    """The card's own ring band (and its filled interior) for a SPECS kind
+    (rounded square for "big", circle for "small" — see shape_sdf), at its
+    own supersampled resolution — shared by the vivid focused ring
+    (render_outline) and the faint default card (render_card_border) baked
+    into every icon, so both always trace the exact same shape."""
     spec = SPECS[kind]
     size = spec["px"]
     ss = SS if size * SS <= MAX_OUTLINE_RES else MAX_OUTLINE_RES / size
@@ -337,18 +347,22 @@ def ring_geometry(kind: str):
 
 
 def corner_bump(dist_from_corner: np.ndarray, outer: float) -> np.ndarray:
-    """1.0 anywhere on the corner's own rounding arc (dist == 0 there, not
-    just at a single point), then smoothstepping down to a hard 0 by
-    ORBIT_HALF_WIDTH_FRAC x outer along the adjoining straight edges — a real
-    dead zone, unlike a raised cosine which never actually reaches zero over
-    a stretch. `dist_from_corner` is Euclidean distance to the corner arc's
-    own centre, minus its radius, so it already reads ~0 along the whole
-    rounding arc and grows ~linearly (true arc-length, not angle) out along
-    the two straight edges past it. Deliberately NOT angle-based: a raw
-    atan2 angle bunches badly approaching a rounded rect's flat edges, and
-    the old always-on ring's position-dependent "nudge" (matching neither
-    angle nor arc-length) only ever had to look fine averaged over a fully
-    lit loop -- it badly distorts where a real dead zone falls."""
+    """1.0 right at the lit point, then smoothstepping down to a hard 0 by
+    ORBIT_HALF_WIDTH_FRAC x outer moving away from it — a real dead zone,
+    unlike a raised cosine which never actually reaches zero over a stretch.
+    For the rounded-square "big" card, `dist_from_corner` is Euclidean
+    distance to the corner arc's own centre, minus its radius, so it already
+    reads ~0 along the whole rounding arc and grows ~linearly (true
+    arc-length, not angle) out along the two straight edges past it. For the
+    circular "small" card there's no arc to speak of, just a fixed point on
+    the ring, so it's plain chord distance from that point — a reasonable
+    stand-in for arc-length at these proportions (only two opposite points
+    are ever lit, so there is no adjoining neighbour to bunch against).
+    Deliberately NOT angle-based: a raw atan2 angle bunches badly approaching
+    a rounded rect's flat edges, and the old always-on ring's
+    position-dependent "nudge" (matching neither angle nor arc-length) only
+    ever had to look fine averaged over a fully lit loop -- it badly
+    distorts where a real dead zone falls."""
     plateau, half_width = ORBIT_PLATEAU_FRAC * outer, ORBIT_HALF_WIDTH_FRAC * outer
     return 1.0 - smoothstep(plateau, half_width, dist_from_corner)
 
@@ -368,14 +382,24 @@ def blur_alpha(alpha: np.ndarray, radius_px: float) -> np.ndarray:
 def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
     spec, _ring, _fill, d_out, px, py, _xs, _ys, _hi, size, ss = ring_geometry(kind)
 
-    # The two lit corners' own rounding-arc centres (see shape_sdf: exactly
-    # where a rounded rect's corner arcs are centred), upper-left / lower-
-    # right, in the same supersampled (px, py) frame as d_out.
+    # The two lit points, upper-left / lower-right, in the same supersampled
+    # (px, py) frame as d_out. For a rounded square this is distance to the
+    # corner's own rounding-arc centre (see shape_sdf: exactly where those
+    # arcs are centred), minus its radius, so it reads ~0 along the whole
+    # arc. A circle has no corners, so the direct analogue is just distance
+    # to a single fixed point on the ring at the same two diagonal
+    # directions — everything downstream (corner_bump, band, colour) is
+    # unchanged, so it's the exact same effect, only traced on a round card.
     outer = (size / 2.0 - spec["margin"]) * ss
-    r = spec["radius"] * ss
-    c = outer - r
-    dist_tl = np.maximum(np.hypot(px + c, py + c) - r, 0.0)
-    dist_br = np.maximum(np.hypot(px - c, py - c) - r, 0.0)
+    if spec["shape"] == "circle":
+        diag = outer / np.sqrt(2.0)
+        dist_tl = np.hypot(px + diag, py + diag)
+        dist_br = np.hypot(px - diag, py - diag)
+    else:
+        r = spec["radius"] * ss
+        c = outer - r
+        dist_tl = np.maximum(np.hypot(px + c, py + c) - r, 0.0)
+        dist_br = np.maximum(np.hypot(px - c, py - c) - r, 0.0)
     bump_tl, bump_br = corner_bump(dist_tl, outer), corner_bump(dist_br, outer)
     bump = np.maximum(bump_tl, bump_br)
 
@@ -408,21 +432,30 @@ def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
     w = w / np.maximum(w + downscale(bump_br, size), 1e-6)
     stroke_rgb = col_tl * w[..., None] + col_br * (1.0 - w)[..., None]
 
+    # SIMPLE colours are the plain tier: a clean, flat accent (no hot white
+    # blend, no halo/bloom glow). PREMIUM/GRADIENT keep the full iridescent
+    # treatment — that visible gap is the whole point (see SIMPLE_* above).
+    is_simple = variant in SIMPLE
+    core_white_mix = SIMPLE_CORE_WHITE_MIX if is_simple else ORBIT_CORE_WHITE_MIX
+    core_alpha_k = SIMPLE_CORE_ALPHA if is_simple else ORBIT_CORE_ALPHA
+    halo_alpha_k = SIMPLE_HALO_ALPHA if is_simple else ORBIT_HALO_ALPHA
+    bloom_alpha_k = SIMPLE_BLOOM_ALPHA if is_simple else ORBIT_BLOOM_ALPHA
+
     # The core blends toward white at each corner's peak — a "hot" highlight —
     # the halo/bloom stay pure hue, which is what actually carries the colour.
     white = np.array([1.0, 1.0, 1.0])
-    mix = (ORBIT_CORE_WHITE_MIX * bump_ds)[..., None]
+    mix = (core_white_mix * bump_ds)[..., None]
     core_rgb = stroke_rgb * (1.0 - mix) + white * mix
-    core_alpha = np.clip(core_mask * ORBIT_CORE_ALPHA, 0.0, 1.0)
+    core_alpha = np.clip(core_mask * core_alpha_k, 0.0, 1.0)
 
     # Blur radii are capped to a fraction of the card's own margin (the clear
     # canvas headroom already reserved outside its edge) so the halo/bloom
     # always fade out before the PNG edge, never clip against it.
     margin = spec["margin"]
     halo_alpha = np.clip(blur_alpha(core_mask, min(spec["border"] * ORBIT_HALO_BLUR, margin * 0.5))
-                          * ORBIT_HALO_ALPHA, 0.0, 1.0)
+                          * halo_alpha_k, 0.0, 1.0)
     bloom_alpha = np.clip(blur_alpha(core_mask, min(spec["border"] * ORBIT_BLOOM_BLUR, margin * 0.8))
-                           * ORBIT_BLOOM_ALPHA, 0.0, 1.0)
+                           * bloom_alpha_k, 0.0, 1.0)
 
     def over(base_rgb, base_a, layer_rgb, layer_a):
         out_a = layer_a + base_a * (1.0 - layer_a)
@@ -614,25 +647,34 @@ def make_preview(variants: list[str]) -> None:
         return
     cell, pad, cols = 240, 22, 5
     chip = 84
+    label_h = 26
+    font = ImageFont.load_default(size=17)
+    row_h = cell + label_h  # each cell plus its name label strip below it
     rows_per_bg = (len(variants) + cols - 1) // cols
     W = cols * cell + (cols + 1) * pad
-    H = 2 * rows_per_bg * cell + (2 * rows_per_bg + 2) * pad + 40
+    H = 2 * rows_per_bg * row_h + (2 * rows_per_bg + 2) * pad + 40
     sheet = Image.new("RGB", (W, H), (17, 17, 19))
+    draw = ImageDraw.Draw(sheet)
 
     for bi, bg in enumerate(("dark", "light")):
-        y_off = bi * (rows_per_bg * cell + (rows_per_bg + 1) * pad + 20)
+        y_off = bi * (rows_per_bg * row_h + (rows_per_bg + 1) * pad + 20)
         for i, v in enumerate(variants):
             cx = pad + (i % cols) * (cell + pad)
-            cy = y_off + 24 + pad + (i // cols) * (cell + pad)
+            cy = y_off + 24 + pad + (i // cols) * (row_h + pad)
             big = look_dir(v, bg) / "selection_big.png"
             small = look_dir(v, bg) / "selection_small.png"
             tile = _cell(BACKGROUNDS[bg], cell,
                          Image.open(big).convert("RGBA").resize((cell, cell), Image.LANCZOS),
                          look_icon(v, bg, "os_arch.png").resize((cell, cell), Image.LANCZOS))
-            ox = cell - chip - 6
-            tile.alpha_composite(Image.open(small).convert("RGBA").resize((chip, chip), Image.LANCZOS), (ox, ox))
-            tile.alpha_composite(look_icon(v, bg, "func_shutdown.png").resize((chip, chip), Image.LANCZOS), (ox, ox))
+            # Tool-icon chip in the top-right corner (was bottom-right).
+            ox, oy = cell - chip - 6, 6
+            tile.alpha_composite(Image.open(small).convert("RGBA").resize((chip, chip), Image.LANCZOS), (ox, oy))
+            tile.alpha_composite(look_icon(v, bg, "func_shutdown.png").resize((chip, chip), Image.LANCZOS), (ox, oy))
             sheet.paste(tile.convert("RGB"), (cx, cy))
+            bbox = draw.textbbox((0, 0), v, font=font)
+            tw = bbox[2] - bbox[0]
+            draw.text((cx + (cell - tw) // 2, cy + cell + (label_h - (bbox[3] - bbox[1])) // 2),
+                       v, font=font, fill=(200, 200, 206))
 
     dest = REPO / "preview.png"
     sheet.save(dest, optimize=True)

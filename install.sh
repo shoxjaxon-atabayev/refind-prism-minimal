@@ -229,16 +229,13 @@ ensure_generated() {
 color_note() {
   case "$1" in
     white)           echo "the default — plain white / dark ink" ;;
-    green|red|violet|pink|gray|blue)
+    green|red|pink|blue)
                      echo "flat $1" ;;
     obsidian-purple) echo "premium · iridescent violet→magenta→teal" ;;
-    titanium-silver) echo "premium · iridescent brushed silver" ;;
     champagne-gold)  echo "premium · iridescent warm gold foil" ;;
     aurora)          echo "premium gradient · emerald → cyan" ;;
-    solaris)         echo "premium gradient · amber → orange" ;;
-    rose-gold)       echo "premium gradient · pink → champagne" ;;
     cyberpunk)       echo "premium gradient · magenta → cyan" ;;
-    platinum)        echo "premium gradient · cool grey → white" ;;
+    platinum)        echo "premium gradient · blue-violet steel" ;;
     *)               echo "" ;;
   esac
 }

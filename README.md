@@ -77,19 +77,18 @@ already in `build/colors/`, this generates just that one first:
 ./install.sh --color obsidian-purple
 ```
 
-Colours: `white` `green` `red` `violet` `pink` `gray` `blue`
-`obsidian-purple` `titanium-silver` `champagne-gold` `aurora` `solaris`
-`rose-gold` `cyberpunk` `platinum`
-&nbsp;&nbsp;*(`obsidian-purple`/`titanium-silver`/`champagne-gold` shimmer;
-`aurora`/`solaris`/`rose-gold`/`cyberpunk`/`platinum` are premium
+Colours: `white` `green` `red` `pink` `blue`
+`obsidian-purple` `champagne-gold` `aurora` `cyberpunk` `platinum`
+&nbsp;&nbsp;*(`obsidian-purple`/`champagne-gold` shimmer;
+`aurora`/`cyberpunk`/`platinum` are premium
 gradients for the dark background)*
 
 An unknown colour name warns and falls back rather than aborting the
 install:
 
 ```
-⚠ Unknown color: purple
-  Available colors: white green red violet ...
+⚠ Unknown color: mauve
+  Available colors: white green red pink ...
 ```
 
 Run `./install.sh --list` to see every colour and its note.

@@ -11,20 +11,31 @@ A "look" here is a **colour** x a **background**:
                  platinum — dark-background pieces
   * background — dark (black, default) or light (near-white)
 
-Icons always render pure white on the dark background (dark ink on the
-light one) — never tinted — so every colour lives in the selection graphic
-alone. Every icon also bakes in a faint glass card: a barely-visible outline
+Icons render white on the dark background (dark ink on the light one),
+lightly tinted toward the variant's own colour (ICON_TINT_MIX) so they read
+as the same palette as the selection graphic without becoming a fully
+coloured icon. Every icon also bakes in a faint glass card: a barely-visible outline
 plus an even fainter interior wash (see CARD_BORDER_ALPHA / CARD_FILL_ALPHA),
 since rEFInd has no notion of an "unselected" graphic to draw it separately.
 Both rows use the same rounded-square card, just at different sizes. The one
-focused entry gets a full *orbital-arc ring* on top of its card instead: a
-continuous border, always at full strength, whose outer glow pulses smoothly
-around the loop — two hotspots per turn, brightest right where the colour
-cycle's two anchor hues land, easing down through the blended hues in
-between to a faint ambient halo, never fully off. SIMPLE colours pulse a
-single flat hue; PREMIUM and GRADIENT alike sweep their hue loop once around
-the ring for a refined prism/iridescent look. On the light background flat/
-iridescent/gradient hues are all darkened for contrast.
+focused entry also gets a *partial light* traced on that exact same card
+perimeter (ring_geometry — same straight edges and rounded corners, never a
+circle or oval of its own). Only two opposite corners ever light up — fixed
+at the upper-left and lower-right, each a smoothstep bump in true distance
+along the card's own edges (corner_bump) that reaches partway down its two
+adjoining sides and fades to fully transparent well before the far corners,
+never a continuous ring. render_card_border already bakes a complete faint
+neutral border into every icon (composited on top of this at the same
+geometry), so this image adds only the coloured light — nothing in the dead
+zones. Each lit corner
+layers a crisp hued core (blended toward white at its peak, for a "hot"
+look), a softer wider halo, and a very restrained outer bloom — the halo/
+bloom are just a Gaussian blur of the core's alpha, scaled down and capped
+to the card's own margin so neither ever clips against the PNG edge. SIMPLE
+colours show the same flat hue at both corners; PREMIUM and GRADIENT sample
+their hue loop at the two anchor angles (phase-shifted per variant per
+CYCLE_PHASE), so each corner picks up a different, related hue. On the light
+background flat/iridescent/gradient hues are all darkened for contrast.
 
 Every icon is also re-padded to a fixed content size so the row has consistent,
 generous spacing regardless of how tightly each source icon was cropped.
@@ -63,6 +74,7 @@ for these before it runs this script).
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -105,8 +117,8 @@ PREMIUM_PHASE: dict[str, float] = {
 }
 
 # Premium gradients: a simple two-stop hue loop (start -> end -> back to
-# start). Painted only onto the orbital-arc selection graphic by
-# render_outline() — never onto the icon set, which stays pure white.
+# start). Painted onto the selection graphic by render_outline(); icon_tint()
+# also draws on these same stops for the icon set's own light colour cast.
 GRADIENT: dict[str, list[str]] = {
     "aurora":     ["#00E676", "#00D4FF"],
     "solaris":    ["#FACC15", "#FB923C"],
@@ -189,17 +201,31 @@ SS = 4  # supersample factor
 # and 1024*SS would be a 4096² float grid (OOM-prone on low-RAM boxes). A
 # rounded-rect stroke needs no more than ~2x SSAA at that size.
 MAX_OUTLINE_RES = 2048
-BORDER_ALPHA = 1.0
-
-# The focused item's ring stroke is always at full, constant strength all the
-# way around — it must never fade to invisible anywhere. Only its GLOW pulses:
-# two hotspots per loop (ARC_PULSE_CYCLES=2), phase-locked (via CYCLE_PHASE) to
-# the hue loop's two anchor colours, easing down to a faint-but-present
-# ambient halo in between (see orbit_pulse(), below) — never fully off.
-ARC_PULSE_CYCLES = 2
-ARC_GLOW_MIN = 0.10       # the glow recedes to a faint ambient halo, never off
-ARC_GLOW_ALPHA = 0.60     # glow strength at each hotspot
-ARC_GLOW_FALLOFF = 1.3    # softer, wider spread than a tight halo
+# The focused item's light is NOT a continuous ring: it traces the SAME
+# rounded-square perimeter as the card (ring_geometry) — never a circle or
+# oval of its own — and only two opposite corners of it ever light up, fixed
+# at the upper-left / lower-right. Each fades smoothly to a hard, genuine 0
+# well before reaching the far corners (corner_bump) — unlike a raised
+# cosine, which is never actually zero over a stretch. There is no separate
+# neutral base layer here: render_card_border already bakes the complete faint card
+# border into every icon (composited on top of this, same geometry), so the
+# dead zones are simply fully transparent.
+ORBIT_WIDTH_MULT = 1.5       # lit-corner stroke width, x the card border's own width
+                              # — a bit more prominent than the card's own hairline,
+                              # but still the same perimeter, not a new ribbon
+# Both fractions are of `outer`, the card's own half-width at its flat edges
+# (see ring_geometry) -- so they scale automatically between "big" and
+# "small". The two OTHER (dead) corners sit a full straight-edge-length away,
+# so ORBIT_HALF_WIDTH_FRAC must stay well under ~1.0 or a lit corner's
+# falloff reaches all the way into its neighbours, leaving no dead zone.
+ORBIT_PLATEAU_FRAC = 0.10    # stays at full strength this close to the corner
+ORBIT_HALF_WIDTH_FRAC = 0.62  # smoothstep falloff to 0 from there
+ORBIT_CORE_ALPHA = 0.95      # crisp core, peak strength at each corner's centre
+ORBIT_CORE_WHITE_MIX = 0.50  # blend toward white at the peak, for a hot core
+ORBIT_HALO_BLUR = 1.6        # x card border width, capped by the card's own margin
+ORBIT_HALO_ALPHA = 0.70
+ORBIT_BLOOM_BLUR = 4.0       # x card border width, capped by the card's own margin
+ORBIT_BLOOM_ALPHA = 0.42
 
 # Every icon — focused or not — bakes in this faint glass-card look (rEFInd
 # only ever draws the vivid ring above behind the one focused entry, so this
@@ -209,6 +235,15 @@ ARC_GLOW_FALLOFF = 1.3    # softer, wider spread than a tight halo
 # a focused icon's outline and glow trace exactly over it.
 CARD_BORDER_ALPHA = 0.12
 CARD_FILL_ALPHA = 0.05
+
+# Every icon in a variant also picks up a light tint of that variant's own
+# colour (see icon_tint / recolor_icon) — a mix, not a full recolour, so it
+# still plainly reads as a white icon with a colour cast rather than a
+# coloured icon. rEFInd keeps one fixed icon file per OS regardless of which
+# entry is currently focused (there is no separate "unfocused" icon asset to
+# swap to), so this applies to every icon in the variant alike, not only
+# whichever one happens to be selected at any moment.
+ICON_TINT_MIX = 0.22
 
 
 # ------------------------------------------------------------------ maths --
@@ -301,47 +336,112 @@ def ring_geometry(kind: str):
     return spec, ring, fill, d_out, px, py, xs, ys, hi, size, ss
 
 
-def orbit_pulse(theta: np.ndarray, phase: float) -> np.ndarray:
-    """0..1, ARC_PULSE_CYCLES smooth peaks per full loop. `phase` is the same
-    offset paint()'s hue LUT indexing uses, so the peak always lands exactly
-    on theta = -phase — the loop's first anchor colour — easing down to its
-    floor at the diametrically opposite point."""
-    return 0.5 + 0.5 * np.cos(2.0 * np.pi * ARC_PULSE_CYCLES * (theta + phase))
+def corner_bump(dist_from_corner: np.ndarray, outer: float) -> np.ndarray:
+    """1.0 anywhere on the corner's own rounding arc (dist == 0 there, not
+    just at a single point), then smoothstepping down to a hard 0 by
+    ORBIT_HALF_WIDTH_FRAC x outer along the adjoining straight edges — a real
+    dead zone, unlike a raised cosine which never actually reaches zero over
+    a stretch. `dist_from_corner` is Euclidean distance to the corner arc's
+    own centre, minus its radius, so it already reads ~0 along the whole
+    rounding arc and grows ~linearly (true arc-length, not angle) out along
+    the two straight edges past it. Deliberately NOT angle-based: a raw
+    atan2 angle bunches badly approaching a rounded rect's flat edges, and
+    the old always-on ring's position-dependent "nudge" (matching neither
+    angle nor arc-length) only ever had to look fine averaged over a fully
+    lit loop -- it badly distorts where a real dead zone falls."""
+    plateau, half_width = ORBIT_PLATEAU_FRAC * outer, ORBIT_HALF_WIDTH_FRAC * outer
+    return 1.0 - smoothstep(plateau, half_width, dist_from_corner)
+
+
+def blur_alpha(alpha: np.ndarray, radius_px: float) -> np.ndarray:
+    """Gaussian-blur a 0..1 alpha plane alone (no colour) — the same trick
+    pad_icon uses for FEATHER_SMALL — so the halo/bloom layers fall straight
+    out of the core's crisp shape instead of needing their own hand-tuned
+    geometry."""
+    if radius_px <= 0.05:
+        return alpha
+    im = Image.fromarray(np.clip(alpha * 255.0, 0, 255).astype(np.uint8), "L")
+    im = im.filter(ImageFilter.GaussianBlur(radius_px))
+    return np.asarray(im, dtype=float) / 255.0
 
 
 def render_outline(kind: str, variant: str, bg: str) -> Image.Image:
-    spec, ring, _fill, d_out, px, py, xs, ys, hi, size, ss = ring_geometry(kind)
+    spec, _ring, _fill, d_out, px, py, _xs, _ys, _hi, size, ss = ring_geometry(kind)
 
-    # Angular position around the shape, in turns. Nudged for the square so a
-    # constant step in theta tracks a roughly constant step in arc-length —
-    # otherwise the corners bunch the mapping (used below for both the hue
-    # sweep and the glow's orbit pulse, so the two stay in lockstep).
-    theta = np.arctan2(py, px) / (2.0 * np.pi) + 0.5
-    if spec["shape"] == "square":
-        theta = theta + 0.18 * ((xs / hi) * 0.58 + (ys / hi) * 0.42)
-    theta = np.mod(theta, 1.0)
+    # The two lit corners' own rounding-arc centres (see shape_sdf: exactly
+    # where a rounded rect's corner arcs are centred), upper-left / lower-
+    # right, in the same supersampled (px, py) frame as d_out.
+    outer = (size / 2.0 - spec["margin"]) * ss
+    r = spec["radius"] * ss
+    c = outer - r
+    dist_tl = np.maximum(np.hypot(px + c, py + c) - r, 0.0)
+    dist_br = np.maximum(np.hypot(px - c, py - c) - r, 0.0)
+    bump_tl, bump_br = corner_bump(dist_tl, outer), corner_bump(dist_br, outer)
+    bump = np.maximum(bump_tl, bump_br)
 
+    # A thin, anti-aliased band straddling the card's own perimeter contour
+    # (d_out == 0 exactly on it) — deliberately re-derived here rather than
+    # reusing ring_geometry's `_ring`, so ORBIT_WIDTH_MULT can widen it a
+    # little beyond the card's own hairline border.
+    bw = spec["border"] * ss * ORBIT_WIDTH_MULT
+    aa = 1.1 * ss
+    band = smoothstep(bw / 2.0 + aa, bw / 2.0 - aa, np.abs(d_out))
+
+    core_mask = downscale(band * bump, size)
+    bump_ds = downscale(bump, size)
+
+    # Each corner gets its own fixed colour (phase apart on the loop/gradient)
+    # rather than a continuously-swept hue — the two lit patches don't touch,
+    # so there is no arc for a sweep to travel across; blending is only ever
+    # needed for the sliver of "big" small-spec canvases where both corners'
+    # falloff might faintly overlap near the image centre, which never
+    # actually happens at these proportions but costs nothing to handle.
     phase = CYCLE_PHASE.get(variant, 0.0)
-    glow_env = ARC_GLOW_MIN + (1.0 - ARC_GLOW_MIN) * orbit_pulse(theta, phase)
-
     mode, col = paint(variant, bg)
     if mode == "grad":
         lut = col
-        t = np.mod(theta + phase, 1.0)
-        stroke_rgb = downscale(lut[np.clip((t * len(lut)).astype(int), 0, len(lut) - 1)], size)
+        col_tl = lut[int(np.mod(phase, 1.0) * len(lut)) % len(lut)]
+        col_br = lut[int(np.mod(phase + 0.5, 1.0) * len(lut)) % len(lut)]
     else:
-        stroke_rgb = np.broadcast_to(col, (size, size, 3)).astype(float)
+        col_tl = col_br = col
+    w = downscale(bump_tl, size)
+    w = w / np.maximum(w + downscale(bump_br, size), 1e-6)
+    stroke_rgb = col_tl * w[..., None] + col_br * (1.0 - w)[..., None]
 
-    # The stroke itself is always full strength, all the way around — only
-    # its glow pulses (via `glow_env`), so the ring never reads as broken.
-    alpha = downscale(ring, size) * BORDER_ALPHA
+    # The core blends toward white at each corner's peak — a "hot" highlight —
+    # the halo/bloom stay pure hue, which is what actually carries the colour.
+    white = np.array([1.0, 1.0, 1.0])
+    mix = (ORBIT_CORE_WHITE_MIX * bump_ds)[..., None]
+    core_rgb = stroke_rgb * (1.0 - mix) + white * mix
+    core_alpha = np.clip(core_mask * ORBIT_CORE_ALPHA, 0.0, 1.0)
 
-    glow_span = max(spec["margin"] * ss, 1.0)
-    glow_raw = np.clip(1.0 - np.maximum(d_out, 0.0) / glow_span, 0.0, 1.0) ** ARC_GLOW_FALLOFF
-    glow_mask = downscale(np.where(d_out > 0.0, glow_raw, 0.0) * glow_env, size)
-    alpha = np.clip(alpha + glow_mask * ARC_GLOW_ALPHA, 0.0, 1.0)
+    # Blur radii are capped to a fraction of the card's own margin (the clear
+    # canvas headroom already reserved outside its edge) so the halo/bloom
+    # always fade out before the PNG edge, never clip against it.
+    margin = spec["margin"]
+    halo_alpha = np.clip(blur_alpha(core_mask, min(spec["border"] * ORBIT_HALO_BLUR, margin * 0.5))
+                          * ORBIT_HALO_ALPHA, 0.0, 1.0)
+    bloom_alpha = np.clip(blur_alpha(core_mask, min(spec["border"] * ORBIT_BLOOM_BLUR, margin * 0.8))
+                           * ORBIT_BLOOM_ALPHA, 0.0, 1.0)
 
-    rgba = np.clip(np.dstack([stroke_rgb, alpha]), 0.0, 1.0)
+    def over(base_rgb, base_a, layer_rgb, layer_a):
+        out_a = layer_a + base_a * (1.0 - layer_a)
+        safe = np.maximum(out_a, 1e-6)
+        out_rgb = (layer_rgb * layer_a[..., None]
+                   + base_rgb * base_a[..., None] * (1.0 - layer_a[..., None])) / safe[..., None]
+        return out_rgb, out_a
+
+    # Back-to-front: bloom, then halo, then the crisp core on top. No neutral
+    # base layer — render_card_border already bakes the complete faint card
+    # border into the icon drawn on top of this at the same geometry, so this
+    # image only ever needs to add the coloured light, transparent elsewhere.
+    rgb = np.zeros((size, size, 3))
+    a = np.zeros((size, size))
+    rgb, a = over(rgb, a, stroke_rgb, bloom_alpha)
+    rgb, a = over(rgb, a, stroke_rgb, halo_alpha)
+    rgb, a = over(rgb, a, core_rgb, core_alpha)
+
+    rgba = np.clip(np.dstack([rgb, a]), 0.0, 1.0)
     return Image.fromarray(
         clear_transparent_rgb((rgba * 255.0 + 0.5).astype(np.uint8)), "RGBA")
 
@@ -401,17 +501,49 @@ def pad_icon(img: Image.Image, out: int, sharpen: bool = True, feather: float = 
     return Image.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGBA")
 
 
-def recolor_icon(padded: Image.Image, bg: str) -> Image.Image:
-    """Icons never carry the selected colour — pure white on the dark
-    background, dark ink on the light one, for every variant alike — so the
-    palette lives only in the orbital-arc selection graphic."""
+def icon_hue_phase(name: str) -> float:
+    """A stable pseudo-random phase in [0, 1) derived from an icon's own
+    filename — deterministic across runs (unlike Python's salted hash()) and
+    independent of directory-listing order or icon count, so adding or
+    removing an icon never reshuffles anyone else's hue."""
+    digest = hashlib.sha256(name.encode()).digest()
+    return int.from_bytes(digest[:4], "big") / 2 ** 32
+
+
+def icon_tint(variant: str, bg: str, name: str | None = None) -> np.ndarray:
+    """A representative colour for a variant's icon tint. SIMPLE variants
+    are one fixed hue, same for every icon — as they should be. GRADIENT/
+    PREMIUM variants sweep a whole hue loop on the selection graphic, but
+    giving every icon the same single averaged blend of that loop made the
+    whole set read exactly as flat as a SIMPLE colour, with none of the
+    iridescent variety the ring shows. So when `name` is given (big OS icons
+    only, see build()), each icon instead samples its OWN point on the loop
+    (icon_hue_phase) — the set as a whole then shows the same multi-hue
+    spread as the ring, just spread across icons instead of across one
+    icon's corners. `name=None` (small func_/tool_ icons) keeps the old
+    single averaged hue: at 64px a per-icon hue split doesn't read cleanly,
+    and a toolbar reads better as one cohesive tint than as a shimmer."""
+    mode, col = paint(variant, bg)
+    if mode != "grad":
+        return col
+    if name is None:
+        return col.mean(axis=0)
+    phase = CYCLE_PHASE.get(variant, 0.0) + icon_hue_phase(name)
+    return col[int(np.mod(phase, 1.0) * len(col)) % len(col)]
+
+
+def recolor_icon(padded: Image.Image, variant: str, bg: str, name: str | None = None) -> Image.Image:
+    """White on the dark background, dark ink on the light one, same as
+    every variant — but blended toward that variant's own colour
+    (ICON_TINT_MIX) rather than staying neutral, so the icon and the
+    selection graphic read as the same palette. `name` (see icon_tint) is
+    what lets each PREMIUM/GRADIENT big icon pick its own facet of the
+    variant's hue loop instead of sharing one flat average."""
     a = np.asarray(padded.convert("RGBA"), dtype=float) / 255.0
-    if bg == "dark":
-        return Image.fromarray(
-            clear_transparent_rgb((a * 255.0 + 0.5).astype(np.uint8)), "RGBA")
     alpha = a[..., 3]
-    _, ink = paint("white", bg)
-    rgb = np.broadcast_to(ink, alpha.shape + (3,))
+    _, base = paint("white", bg)
+    tint = icon_tint(variant, bg, name)
+    rgb = np.broadcast_to(base * (1.0 - ICON_TINT_MIX) + tint * ICON_TINT_MIX, alpha.shape + (3,))
     out = np.clip(np.dstack([rgb, alpha]), 0.0, 1.0)
     return Image.fromarray(
         clear_transparent_rgb((out * 255.0 + 0.5).astype(np.uint8)), "RGBA")
@@ -456,8 +588,13 @@ def build(variant: str) -> None:
         card = {"big": render_card_border("big", bg),
                 "small": render_card_border("small", bg).resize((OUT_SMALL, OUT_SMALL), Image.LANCZOS)}
         for name, pic in padded.items():
-            icon = recolor_icon(pic, bg)
-            icon = Image.alpha_composite(icon, card["big" if is_big_icon(name) else "small"])
+            # Per-icon hue variation (icon_tint's `name` arg) only for the
+            # big OS icons — plenty of resolution there for the premium
+            # loop's own facets to read cleanly per icon. func_/tool_ icons
+            # pass name=None and keep the old single averaged tint.
+            big = is_big_icon(name)
+            icon = recolor_icon(pic, variant, bg, name=name if big else None)
+            icon = Image.alpha_composite(icon, card["big" if big else "small"])
             icon.save(d / "icons" / name, optimize=True)
     print(f"  {variant:16s} -> {COLORS_DIR}/{variant}/  (+ light/)  {len(sources)} icons x2")
 
